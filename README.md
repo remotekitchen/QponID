@@ -1,6 +1,6 @@
 # Hungry Tiger Frontend (Expo)
 
-Mobile frontend for Hungry Tiger table-ordering flow, built with Expo + React Native.
+Mobile frontend for Hungry Tiger  flow, built with Expo + React Native.
 
 ## Prerequisites
 
