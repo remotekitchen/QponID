@@ -1,11 +1,12 @@
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  ActivityIndicator,
   Dimensions,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,8 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocationPicker } from '@/contexts/LocationContext';
 import { Brand } from '@/constants/Colors';
-import { HOME_BANNERS, HOME_CATEGORIES, type HomeCategory } from '@/constants/homeMockData';
-import { fetchNearbyRestaurants, type NearbyRestaurant } from '@/lib/nearbyRestaurants';
+import { HOME_BANNERS, HOME_CATEGORIES, NEARBY_PROMOS, type HomeCategory, type NearbyPromo } from '@/constants/homeMockData';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const BANNER_W = Math.round(SCREEN_W * 0.78);
@@ -149,71 +149,43 @@ function FilterChips({ onRefresh }: { onRefresh: () => void }) {
   );
 }
 
-function RestaurantRow({ restaurant }: { restaurant: NearbyRestaurant }) {
+function RestaurantRow({ restaurant, onPress }: { restaurant: NearbyPromo; onPress: () => void }) {
   return (
-    <View style={styles.promoCard}>
-      <View style={styles.promoImg}>
-        <MaterialCommunityIcons name="silverware-fork-knife" size={28} color={Brand.black} />
-      </View>
+    <Pressable style={styles.promoCard} onPress={onPress}>
+      <Image source={{ uri: restaurant.image }} style={styles.promoImg} />
       <View style={styles.promoBody}>
         <Text style={styles.promoTitle} numberOfLines={2}>
-          {restaurant.name}
+          {restaurant.title}
         </Text>
-        <View style={styles.ratingRow}>
-          <MaterialCommunityIcons name="map-marker-outline" size={16} color={Brand.black} />
-          <Text style={styles.ratingText}>
-            {restaurant.distanceKm.toFixed(2)} km away
-          </Text>
+        <View style={styles.metaRow}>
+          <MaterialCommunityIcons name="star" size={16} color={Brand.black} />
+          <Text style={styles.metaText}>{restaurant.rating}</Text>
+          <Text style={styles.metaDot}>•</Text>
+          <Text style={styles.metaText}>{restaurant.category}</Text>
         </View>
         <View style={styles.tagRow}>
           <View style={styles.tagPill}>
-            <Text style={styles.tagText}>{restaurant.cuisine ?? 'Restaurant'}</Text>
+            <Text style={styles.tagText}>{restaurant.tags[0]?.label ?? 'Promo'}</Text>
           </View>
           <View style={[styles.tagPill, styles.tagOrange]}>
-            <Text style={styles.tagText}>OpenStreetMap</Text>
+            <Text style={styles.tagText}>{restaurant.distance}</Text>
           </View>
         </View>
         <Text style={styles.addressText} numberOfLines={2}>
           {restaurant.address}
         </Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
 export default function HomeScreen() {
   const { user, openLogin } = useAuth();
   const { savedLocation, openLocationPicker, locationReady } = useLocationPicker();
-  const [nearbyRestaurants, setNearbyRestaurants] = useState<NearbyRestaurant[]>([]);
-  const [restaurantsLoading, setRestaurantsLoading] = useState(false);
-  const [restaurantsError, setRestaurantsError] = useState<string | null>(null);
+  const router = useRouter();
   const tabBarH = useBottomTabBarHeight();
   const loginBarOffset = tabBarH + 10;
   const scrollBottomPad = tabBarH + (user ? 24 : 88);
-
-  const loadNearbyRestaurants = async () => {
-    if (!savedLocation) return;
-    setRestaurantsLoading(true);
-    setRestaurantsError(null);
-    try {
-      const rows = await fetchNearbyRestaurants(savedLocation.latitude, savedLocation.longitude);
-      setNearbyRestaurants(rows);
-    } catch {
-      setRestaurantsError('Could not fetch restaurants right now. Please try refresh.');
-      setNearbyRestaurants([]);
-    } finally {
-      setRestaurantsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!savedLocation) {
-      setNearbyRestaurants([]);
-      setRestaurantsError(null);
-      return;
-    }
-    void loadNearbyRestaurants();
-  }, [savedLocation?.latitude, savedLocation?.longitude]);
 
   return (
     <View style={styles.root}>
@@ -266,46 +238,15 @@ export default function HomeScreen() {
         </ScrollView>
 
         <View style={styles.nearbySection}>
-          <Text style={styles.nearbyTitle}>Nearby restaurants</Text>
-          <FilterChips onRefresh={() => void loadNearbyRestaurants()} />
-
-          {!savedLocation ? (
-            <View style={styles.stateCard}>
-              <Text style={styles.stateTitle}>Set your location first</Text>
-              <Text style={styles.stateSub}>Tap the location dropdown above to choose area on map.</Text>
-              <Pressable style={styles.stateBtn} onPress={openLocationPicker}>
-                <Text style={styles.stateBtnText}>Select location</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {savedLocation && restaurantsLoading ? (
-            <View style={styles.stateCard}>
-              <ActivityIndicator color={Brand.black} />
-              <Text style={styles.stateSub}>Fetching nearby restaurants…</Text>
-            </View>
-          ) : null}
-
-          {savedLocation && !restaurantsLoading && restaurantsError ? (
-            <View style={styles.stateCard}>
-              <Text style={styles.stateTitle}>Could not load places</Text>
-              <Text style={styles.stateSub}>{restaurantsError}</Text>
-              <Pressable style={styles.stateBtn} onPress={() => void loadNearbyRestaurants()}>
-                <Text style={styles.stateBtnText}>Try again</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {savedLocation && !restaurantsLoading && !restaurantsError && nearbyRestaurants.length === 0 ? (
-            <View style={styles.stateCard}>
-              <Text style={styles.stateTitle}>No nearby restaurants found</Text>
-              <Text style={styles.stateSub}>Try another area or increase density by moving map to city center.</Text>
-            </View>
-          ) : null}
-
-          {!restaurantsLoading && !restaurantsError
-            ? nearbyRestaurants.map((r) => <RestaurantRow key={r.id} restaurant={r} />)
-            : null}
+          <Text style={styles.nearbyTitle}>Popular restaurants</Text>
+          <FilterChips onRefresh={() => undefined} />
+          {NEARBY_PROMOS.map((restaurant) => (
+            <RestaurantRow
+              key={restaurant.id}
+              restaurant={restaurant}
+              onPress={() => router.push(`/restaurant/${restaurant.id}` as never)}
+            />
+          ))}
         </View>
       </ScrollView>
 
@@ -568,9 +509,6 @@ const styles = StyleSheet.create({
     width: 92,
     height: 92,
     borderRadius: 12,
-    backgroundColor: '#EEE',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   promoBody: {
     flex: 1,
@@ -582,16 +520,19 @@ const styles = StyleSheet.create({
     color: Brand.black,
     marginBottom: 6,
   },
-  ratingRow: {
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     marginBottom: 8,
   },
-  ratingText: {
+  metaText: {
     fontSize: 12,
     color: Brand.grey,
-    flex: 1,
+  },
+  metaDot: {
+    fontSize: 12,
+    color: Brand.grey,
   },
   tagRow: {
     flexDirection: 'row',

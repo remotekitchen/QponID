@@ -4,12 +4,14 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
+import { Provider as ReduxProvider } from 'react-redux';
 import 'react-native-reanimated';
 
 import LoginModal from '@/components/auth/LoginModal';
 import { useColorScheme } from '@/components/useColorScheme';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { LocationProvider } from '@/contexts/LocationContext';
+import { store } from '@/store';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -52,16 +54,18 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <LocationProvider>
-        <AuthProvider>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-          </Stack>
-          <LoginModal />
-        </AuthProvider>
-      </LocationProvider>
-    </ThemeProvider>
+    <ReduxProvider store={store}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <LocationProvider>
+          <AuthProvider>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+            </Stack>
+            <LoginModal />
+          </AuthProvider>
+        </LocationProvider>
+      </ThemeProvider>
+    </ReduxProvider>
   );
 }

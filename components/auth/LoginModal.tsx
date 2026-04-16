@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -19,31 +20,43 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { PRIVACY_URL, TERMS_URL } from '@/constants/legalUrls';
 import { Brand } from '@/constants/Colors';
-import { isMockAuthAvailable } from '@/lib/authMode';
-import { isAuthConfigured, supabase } from '@/lib/supabase';
-import { toBangladeshE164 } from '@/lib/phone';
+import { sendFcmTokenAfterLogin } from '@/lib/fcm';
+import { loginWithEmail, loginWithGoogle, loginWithPhone } from '@/lib/login';
+import { registerUser } from '@/lib/register';
 
-type Step = 'phone' | 'otp';
+type AuthMode = 'login' | 'register';
+type LoginMethod = 'phone' | 'email' | 'google';
 
 export default function LoginModal() {
-  const { loginOpen, closeLogin, signInWithMockPhone } = useAuth();
-  const mockAuthOn = isMockAuthAvailable();
-  const [step, setStep] = useState<Step>('phone');
+  const { loginOpen, closeLogin, signInWithBackend } = useAuth();
+  const [mode, setMode] = useState<AuthMode>('login');
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>('phone');
   const [localPhone, setLocalPhone] = useState('');
-  const [e164, setE164] = useState<string | null>(null);
-  const [otp, setOtp] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [referredBy, setReferredBy] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  const [verifying, setVerifying] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
 
   const reset = useCallback(() => {
-    setStep('phone');
+    setMode('login');
+    setLoginMethod('phone');
     setLocalPhone('');
-    setE164(null);
-    setOtp('');
+    setFirstName('');
+    setLastName('');
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setReferredBy('');
     setError(null);
-    setSending(false);
-    setVerifying(false);
+    setRegistering(false);
+    setLoggingIn(false);
+    setGoogleBusy(false);
   }, []);
 
   useEffect(() => {
@@ -58,96 +71,126 @@ export default function LoginModal() {
   const openTerms = () => WebBrowser.openBrowserAsync(TERMS_URL);
   const openPrivacy = () => WebBrowser.openBrowserAsync(PRIVACY_URL);
 
-  const sendOtp = async () => {
-    setError(null);
-    if (!isAuthConfigured || !supabase) {
-      if (mockAuthOn) {
-        setError(
-          'SMS login is not configured. Use “Continue without SMS (dev)” below, or add Supabase keys in .env and enable Phone auth.'
-        );
-        return;
-      }
-      setError(
-        'Add EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY to a .env file, restart Expo, and enable Phone auth + SMS in your Supabase project.'
-      );
-      return;
+  const finalizeLogin = async (token: string, user_info: unknown) => {
+    await signInWithBackend(token, user_info);
+    const id =
+      user_info && typeof user_info === 'object'
+        ? ((user_info as any).id ?? (user_info as any).user_id ?? (user_info as any).uuid)
+        : null;
+    if (typeof id === 'string' && id) {
+      await sendFcmTokenAfterLogin(id, token);
     }
-
-    const phone = toBangladeshE164(localPhone);
-    if (!phone) {
-      setError('Enter a valid Bangladesh mobile number (e.g. 01712345678 or 1712345678).');
-      return;
-    }
-
-    setSending(true);
-    const { error: err } = await supabase.auth.signInWithOtp({ phone });
-    setSending(false);
-
-    if (err) {
-      setError(err.message);
-      return;
-    }
-
-    setE164(phone);
-    setStep('otp');
-    setOtp('');
-    Alert.alert('Code sent', 'Check your SMS for the one-time code.');
-  };
-
-  const verifyOtp = async () => {
-    setError(null);
-    if (!supabase || !e164) {
-      setError('Session expired. Request a new code.');
-      setStep('phone');
-      return;
-    }
-
-    const code = otp.replace(/\D/g, '');
-    if (code.length < 6) {
-      setError('Enter the 6-digit code from SMS.');
-      return;
-    }
-
-    setVerifying(true);
-    const { error: err } = await supabase.auth.verifyOtp({
-      phone: e164,
-      token: code,
-      type: 'sms',
-    });
-    setVerifying(false);
-
-    if (err) {
-      setError(err.message);
-      return;
-    }
-
     reset();
     closeLogin();
+    Alert.alert('Welcome', 'Login successful.');
   };
 
-  const resend = async () => {
-    if (!supabase || !e164) return;
+  const login = async () => {
     setError(null);
-    setSending(true);
-    const { error: err } = await supabase.auth.signInWithOtp({ phone: e164 });
-    setSending(false);
-    if (err) setError(err.message);
-    else Alert.alert('Code sent', 'A new SMS code has been sent.');
+    setLoggingIn(true);
+    try {
+      if (loginMethod === 'phone') {
+        const { token, user_info } = await loginWithPhone({ phoneLocal: localPhone, password });
+        await finalizeLogin(token, user_info);
+      } else if (loginMethod === 'email') {
+        const { token, user_info } = await loginWithEmail({ email, password });
+        await finalizeLogin(token, user_info);
+      } else {
+        setError('Use the Google button to sign in.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not login now.');
+    } finally {
+      setLoggingIn(false);
+    }
   };
 
-  const continueWithoutSms = async () => {
+  const googleLogin = async () => {
     setError(null);
-    const phone = toBangladeshE164(localPhone);
-    if (!phone) {
-      setError('Enter a valid Bangladesh mobile number (e.g. 01712345678).');
+    setGoogleBusy(true);
+    try {
+      // NOTE: This uses "Google OAuth via AuthSession" without extra config screens.
+      // You must set the correct redirect/Google client IDs in your Expo project for production.
+      const redirectUri = AuthSession.makeRedirectUri();
+      const discovery = {
+        authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+        tokenEndpoint: 'https://oauth2.googleapis.com/token',
+      };
+
+      const request = new AuthSession.AuthRequest({
+        clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '',
+        redirectUri,
+        scopes: ['openid', 'profile', 'email'],
+        responseType: AuthSession.ResponseType.Token,
+        extraParams: { prompt: 'select_account' },
+      });
+
+      await request.makeAuthUrlAsync(discovery);
+      const result = await request.promptAsync(discovery);
+      if (result.type !== 'success') {
+        if (result.type !== 'dismiss' && result.type !== 'cancel') setError('Google login cancelled.');
+        return;
+      }
+      const accessToken =
+        (result.params && typeof (result.params as any).access_token === 'string'
+          ? (result.params as any).access_token
+          : null) ?? null;
+      if (!accessToken) {
+        setError('Google login failed: no access token returned.');
+        return;
+      }
+      const { token, user_info } = await loginWithGoogle({ accessToken, idToken: '' });
+      await finalizeLogin(token, user_info);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google login failed.');
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const register = async () => {
+    setError(null);
+
+    if (!firstName.trim()) {
+      setError('First name is required.');
       return;
     }
+    if (!lastName.trim()) {
+      setError('Last name is required.');
+      return;
+    }
+    if (!email.trim() || !email.includes('@')) {
+      setError('Enter a valid email address.');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (confirmPassword !== password) {
+      setError('Confirm password does not match.');
+      return;
+    }
+
+    setRegistering(true);
     try {
-      await signInWithMockPhone(phone);
-      reset();
-      closeLogin();
-    } catch {
-      setError('Could not save dev session.');
+      await registerUser({
+        firstName,
+        lastName,
+        email,
+        password,
+        phoneLocal: localPhone,
+        referredBy,
+      });
+      setMode('login');
+      setError(null);
+      setPassword('');
+      setConfirmPassword('');
+      Alert.alert('Registration successful', 'Your account was created. Please log in now.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not register now.');
+    } finally {
+      setRegistering(false);
     }
   };
 
@@ -180,38 +223,205 @@ export default function LoginModal() {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.sheetBody}>
-              <Text style={styles.title}>Login/Register</Text>
-              <Text style={styles.subtitle}>Log in to check out more offers</Text>
+              <Text style={styles.title}>Login / Register</Text>
+              <Text style={styles.subtitle}>Use your account to unlock more offers</Text>
 
-              {!isAuthConfigured && mockAuthOn && (
-                <View style={styles.configBanner}>
-                  <Text style={styles.configBannerText}>
-                    No Supabase keys in .env yet — real SMS will not send. You can still use{' '}
-                    <Text style={{ fontWeight: '800' }}>Continue without SMS (dev)</Text> after
-                    entering a valid BD number (saved only on this device).
-                  </Text>
-                </View>
-              )}
-              {!isAuthConfigured && !mockAuthOn && (
-                <View style={styles.configBanner}>
-                  <Text style={styles.configBannerText}>
-                    Supabase env vars missing. Add EXPO_PUBLIC_SUPABASE_URL and
-                    EXPO_PUBLIC_SUPABASE_ANON_KEY (see .env.example), restart Expo, and enable Phone
-                    auth in Supabase. For local UI testing only, set EXPO_PUBLIC_DEV_MOCK_AUTH=true.
-                  </Text>
-                </View>
-              )}
-              {isAuthConfigured && mockAuthOn && (
-                <View style={[styles.configBanner, styles.devOnlyBanner]}>
-                  <Text style={styles.configBannerText}>
-                    Dev mock auth is on (EXPO_PUBLIC_DEV_MOCK_AUTH). You can skip SMS; do not ship
-                    this flag to production.
-                  </Text>
-                </View>
-              )}
+              <View style={styles.switchWrap}>
+                <Pressable
+                  style={[styles.switchBtn, mode === 'login' && styles.switchBtnActive]}
+                  onPress={() => {
+                    setMode('login');
+                    setError(null);
+                  }}>
+                  <Text style={[styles.switchText, mode === 'login' && styles.switchTextActive]}>Login</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.switchBtn, mode === 'register' && styles.switchBtnActive]}
+                  onPress={() => {
+                    setMode('register');
+                    setError(null);
+                  }}>
+                  <Text style={[styles.switchText, mode === 'register' && styles.switchTextActive]}>Register</Text>
+                </Pressable>
+              </View>
 
-              {step === 'phone' && (
+              {mode === 'login' && (
                 <>
+                  <View style={styles.methodWrap}>
+                    <Pressable
+                      style={[styles.methodBtn, loginMethod === 'phone' && styles.methodBtnActive]}
+                      onPress={() => {
+                        setLoginMethod('phone');
+                        setError(null);
+                      }}>
+                      <Text style={[styles.methodText, loginMethod === 'phone' && styles.methodTextActive]}>Phone</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.methodBtn, loginMethod === 'email' && styles.methodBtnActive]}
+                      onPress={() => {
+                        setLoginMethod('email');
+                        setError(null);
+                      }}>
+                      <Text style={[styles.methodText, loginMethod === 'email' && styles.methodTextActive]}>Email</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.methodBtn, loginMethod === 'google' && styles.methodBtnActive]}
+                      onPress={() => {
+                        setLoginMethod('google');
+                        setError(null);
+                      }}>
+                      <Text style={[styles.methodText, loginMethod === 'google' && styles.methodTextActive]}>Google</Text>
+                    </Pressable>
+                  </View>
+
+                  {loginMethod === 'phone' ? (
+                    <>
+                      <View style={styles.phoneRow}>
+                        <Pressable
+                          style={styles.country}
+                          onPress={() =>
+                            Alert.alert('Country', 'Hungry Tiger currently supports Bangladesh (+880) only.')
+                          }>
+                          <Text style={styles.countryText}>+880</Text>
+                          <MaterialCommunityIcons name="chevron-down" size={18} color={Brand.black} />
+                        </Pressable>
+                        <View style={styles.divider} />
+                        <TextInput
+                          value={localPhone}
+                          onChangeText={(t) => {
+                            setLocalPhone(t);
+                            setError(null);
+                          }}
+                          placeholder="Phone number (e.g. 01712345678)"
+                          placeholderTextColor="#9E9E9E"
+                          keyboardType="phone-pad"
+                          style={styles.phoneInput}
+                        />
+                      </View>
+                      <TextInput
+                        value={password}
+                        onChangeText={(t) => {
+                          setPassword(t);
+                          setError(null);
+                        }}
+                        placeholder="Password"
+                        placeholderTextColor="#9E9E9E"
+                        secureTextEntry
+                        style={styles.input}
+                      />
+                      <Pressable
+                        style={[styles.primaryBtn, (loggingIn || registering) && styles.primaryBtnDisabled]}
+                        onPress={login}
+                        disabled={loggingIn || registering}>
+                        {loggingIn ? (
+                          <ActivityIndicator color="#333" />
+                        ) : (
+                          <Text style={styles.primaryBtnText}>Login</Text>
+                        )}
+                      </Pressable>
+                    </>
+                  ) : null}
+
+                  {loginMethod === 'email' ? (
+                    <>
+                      <TextInput
+                        value={email}
+                        onChangeText={(t) => {
+                          setEmail(t);
+                          setError(null);
+                        }}
+                        placeholder="Email"
+                        placeholderTextColor="#9E9E9E"
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        style={styles.input}
+                      />
+                      <TextInput
+                        value={password}
+                        onChangeText={(t) => {
+                          setPassword(t);
+                          setError(null);
+                        }}
+                        placeholder="Password"
+                        placeholderTextColor="#9E9E9E"
+                        secureTextEntry
+                        style={styles.input}
+                      />
+                      <Pressable
+                        style={[styles.primaryBtn, (loggingIn || registering) && styles.primaryBtnDisabled]}
+                        onPress={login}
+                        disabled={loggingIn || registering}>
+                        {loggingIn ? (
+                          <ActivityIndicator color="#333" />
+                        ) : (
+                          <Text style={styles.primaryBtnText}>Login</Text>
+                        )}
+                      </Pressable>
+                    </>
+                  ) : null}
+
+                  {loginMethod === 'google' ? (
+                    <>
+                      <Pressable
+                        style={[styles.googleBtn, googleBusy && styles.primaryBtnDisabled]}
+                        onPress={googleLogin}
+                        disabled={googleBusy}>
+                        {googleBusy ? (
+                          <ActivityIndicator color="#333" />
+                        ) : (
+                          <Text style={styles.googleBtnText}>Continue with Google</Text>
+                        )}
+                      </Pressable>
+                      {!process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ? (
+                        <Text style={styles.helper}>
+                          Set `EXPO_PUBLIC_GOOGLE_CLIENT_ID` in `.env` to enable Google login.
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              )}
+
+              {mode === 'register' && (
+                <>
+                  <View style={styles.rowTwo}>
+                    <TextInput
+                      value={firstName}
+                      onChangeText={(t) => {
+                        setFirstName(t);
+                        setError(null);
+                      }}
+                      placeholder="First name"
+                      placeholderTextColor="#9E9E9E"
+                      style={[styles.input, styles.flexOne]}
+                      autoCapitalize="words"
+                    />
+                    <TextInput
+                      value={lastName}
+                      onChangeText={(t) => {
+                        setLastName(t);
+                        setError(null);
+                      }}
+                      placeholder="Last name"
+                      placeholderTextColor="#9E9E9E"
+                      style={[styles.input, styles.flexOne]}
+                      autoCapitalize="words"
+                    />
+                  </View>
+
+                  <TextInput
+                    value={email}
+                    onChangeText={(t) => {
+                      setEmail(t);
+                      setError(null);
+                    }}
+                    placeholder="Email"
+                    placeholderTextColor="#9E9E9E"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    style={styles.input}
+                  />
+
                   <View style={styles.phoneRow}>
                     <Pressable
                       style={styles.country}
@@ -228,69 +438,59 @@ export default function LoginModal() {
                         setLocalPhone(t);
                         setError(null);
                       }}
-                      placeholder="Please enter phone number"
+                      placeholder="Phone number"
                       placeholderTextColor="#9E9E9E"
                       keyboardType="phone-pad"
                       style={styles.phoneInput}
-                      autoComplete="tel"
-                      textContentType="telephoneNumber"
                     />
                   </View>
 
-                  <Pressable
-                    style={[styles.primaryBtn, sending && styles.primaryBtnDisabled]}
-                    onPress={sendOtp}
-                    disabled={sending}>
-                    {sending ? (
-                      <ActivityIndicator color="#333" />
-                    ) : (
-                      <Text style={styles.primaryBtnText}>Get OTP</Text>
-                    )}
-                  </Pressable>
-
-                  {mockAuthOn ? (
-                    <Pressable style={styles.devMockBtn} onPress={continueWithoutSms}>
-                      <Text style={styles.devMockBtnText}>Continue without SMS (dev)</Text>
-                    </Pressable>
-                  ) : null}
-                </>
-              )}
-
-              {step === 'otp' && (
-                <>
-                  <Text style={styles.otpHint}>Enter the code sent to {e164}</Text>
                   <TextInput
-                    value={otp}
+                    value={password}
                     onChangeText={(t) => {
-                      setOtp(t.replace(/\D/g, '').slice(0, 8));
+                      setPassword(t);
                       setError(null);
                     }}
-                    placeholder="6-digit code"
+                    placeholder="Password"
                     placeholderTextColor="#9E9E9E"
-                    keyboardType="number-pad"
-                    style={styles.otpInput}
-                    maxLength={8}
+                    secureTextEntry
+                    style={styles.input}
+                  />
+
+                  <TextInput
+                    value={confirmPassword}
+                    onChangeText={(t) => {
+                      setConfirmPassword(t);
+                      setError(null);
+                    }}
+                    placeholder="Confirm password"
+                    placeholderTextColor="#9E9E9E"
+                    secureTextEntry
+                    style={styles.input}
+                  />
+
+                  <TextInput
+                    value={referredBy}
+                    onChangeText={(t) => {
+                      setReferredBy(t);
+                      setError(null);
+                    }}
+                    placeholder="Referral code (optional)"
+                    placeholderTextColor="#9E9E9E"
+                    autoCapitalize="characters"
+                    style={styles.input}
                   />
 
                   <Pressable
-                    style={[styles.primaryBtn, verifying && styles.primaryBtnDisabled]}
-                    onPress={verifyOtp}
-                    disabled={verifying}>
-                    {verifying ? (
+                    style={[styles.primaryBtn, registering && styles.primaryBtnDisabled]}
+                    onPress={register}
+                    disabled={registering}>
+                    {registering ? (
                       <ActivityIndicator color="#333" />
                     ) : (
-                      <Text style={styles.primaryBtnText}>Verify & log in</Text>
+                      <Text style={styles.primaryBtnText}>Create account</Text>
                     )}
                   </Pressable>
-
-                  <View style={styles.otpActions}>
-                    <Pressable onPress={() => { setStep('phone'); setOtp(''); setError(null); }}>
-                      <Text style={styles.link}>Change number</Text>
-                    </Pressable>
-                    <Pressable onPress={resend} disabled={sending}>
-                      <Text style={[styles.link, sending && { opacity: 0.5 }]}>Resend code</Text>
-                    </Pressable>
-                  </View>
                 </>
               )}
 
@@ -372,32 +572,90 @@ const styles = StyleSheet.create({
     color: Brand.grey,
     marginBottom: 20,
   },
-  configBanner: {
-    backgroundColor: Brand.yellowMuted,
-    padding: 12,
-    borderRadius: 12,
+  switchWrap: {
+    flexDirection: 'row',
+    backgroundColor: Brand.greyLight,
+    borderRadius: 14,
+    padding: 4,
     marginBottom: 16,
   },
-  configBannerText: {
-    fontSize: 12,
-    color: '#333',
-    lineHeight: 18,
+  switchBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
   },
-  devOnlyBanner: {
-    backgroundColor: '#E8F5E9',
+  switchBtnActive: {
+    backgroundColor: Brand.yellow,
   },
-  devMockBtn: {
-    borderWidth: 2,
-    borderColor: '#2E7D32',
+  switchText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Brand.grey,
+  },
+  switchTextActive: {
+    color: Brand.black,
+  },
+  rowTwo: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  flexOne: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  input: {
+    backgroundColor: Brand.greyLight,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 16,
+    color: Brand.black,
+    marginBottom: 12,
+  },
+  methodWrap: {
+    flexDirection: 'row',
+    backgroundColor: Brand.greyLight,
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 16,
+    gap: 6,
+  },
+  methodBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  methodBtnActive: {
+    backgroundColor: Brand.yellow,
+  },
+  methodText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Brand.grey,
+  },
+  methodTextActive: {
+    color: Brand.black,
+  },
+  googleBtn: {
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
+    backgroundColor: Brand.yellow,
   },
-  devMockBtnText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#1B5E20',
+  googleBtnText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: Brand.black,
+  },
+  helper: {
+    fontSize: 12,
+    color: Brand.grey,
+    marginBottom: 10,
+    lineHeight: 18,
   },
   phoneRow: {
     flexDirection: 'row',
@@ -431,23 +689,6 @@ const styles = StyleSheet.create({
     color: Brand.black,
     paddingVertical: Platform.OS === 'ios' ? 12 : 8,
   },
-  otpHint: {
-    fontSize: 14,
-    color: Brand.grey,
-    marginBottom: 10,
-  },
-  otpInput: {
-    backgroundColor: Brand.greyLight,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 22,
-    fontWeight: '700',
-    letterSpacing: 4,
-    color: Brand.black,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
   primaryBtn: {
     backgroundColor: Brand.yellowMuted,
     borderRadius: 14,
@@ -462,16 +703,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: Brand.black,
-  },
-  otpActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  link: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1565C0',
   },
   error: {
     color: '#C62828',
