@@ -3,8 +3,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Dimensions,
   Image,
   Pressable,
@@ -19,7 +20,102 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocationPicker } from '@/contexts/LocationContext';
 import { Brand } from '@/constants/Colors';
-import { HOME_BANNERS, HOME_CATEGORIES, NEARBY_PROMOS, type HomeCategory, type NearbyPromo } from '@/constants/homeMockData';
+import { DEFAULT_MAP_CENTER } from '@/constants/mapDefaults';
+import { HOME_BANNERS, HOME_CATEGORIES, type HomeCategory } from '@/constants/homeMockData';
+import {
+  type GrouponRestaurantRow,
+  useGetRestaurantsWithDealsQuery,
+} from '@/store/grouponApi';
+
+const DEAL_TABS = ['Relevance', 'Nearby', 'Deals'] as const;
+type DealTab = (typeof DEAL_TABS)[number];
+
+const FILTER_BY_TAB: Record<DealTab, string> = {
+  Relevance: 'all',
+  Nearby: 'nearby',
+  Deals: 'deals',
+};
+
+type HomeDealCard = {
+  key: string;
+  title: string;
+  sold: string;
+  price: string;
+  originalPrice?: string;
+  discountTag?: string;
+  image: string;
+  /** Place / address without distance */
+  placeLabel: string;
+  /** Distance from user in km; `null` if unknown */
+  distanceKm: number | null;
+  restaurantId: number;
+  dealId: number;
+  totalSales: number;
+};
+
+/** Pretty distance: meters when under 1 km, otherwise km */
+function formatDistanceKm(km: number): string {
+  if (!Number.isFinite(km) || km < 0) return '';
+  if (km < 1) {
+    const m = Math.max(1, Math.round(km * 1000));
+    return `${m.toLocaleString('en-BD')} m away`;
+  }
+  if (km < 10) {
+    return `${km.toFixed(1)} km away`;
+  }
+  return `${Math.round(km)} km away`;
+}
+
+function normalizeDealsFromApi(restaurants: GrouponRestaurantRow[]): HomeDealCard[] {
+  const rows: HomeDealCard[] = [];
+  for (const restaurant of restaurants) {
+    const deals = restaurant.deals ?? [];
+    for (const deal of deals) {
+      if (deal.is_deleted) continue;
+      const discountTag =
+        deal.discount_type === 'percentage' && deal.restaurant_discount != null
+          ? `${deal.restaurant_discount}% off`
+          : deal.discount != null
+            ? `৳${deal.discount} off`
+            : undefined;
+      const totalSales = deal.total_sales ?? 0;
+      const rawDist = restaurant.distance_km;
+      let distanceKm: number | null = null;
+      if (rawDist != null && rawDist !== '') {
+        const n = Number(rawDist);
+        if (Number.isFinite(n)) distanceKm = n;
+      }
+      const placeLabel = (restaurant.location || restaurant.address || '').trim();
+      rows.push({
+        key: `${restaurant.id}-${deal.id}`,
+        title: `${restaurant.name} | ${deal.name}`,
+        sold: `${totalSales}+ sold`,
+        price: `৳${Number(deal.sale_price).toLocaleString('en-BD', {
+          maximumFractionDigits: Number(deal.sale_price) % 1 === 0 ? 0 : 2,
+        })}`,
+        originalPrice:
+          deal.original_price != null && deal.original_price !== ''
+            ? `৳${Number(deal.original_price).toLocaleString('en-BD', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}`
+            : undefined,
+        discountTag,
+        image:
+          deal.groupon_image ||
+          restaurant.banner_url ||
+          restaurant.logo_url ||
+          'https://images.unsplash.com/photo-1543353071-873f17a7a088?auto=format&fit=crop&w=400&q=80',
+        placeLabel,
+        distanceKm,
+        restaurantId: restaurant.id,
+        dealId: deal.id,
+        totalSales,
+      });
+    }
+  }
+  return rows.sort((a, b) => b.totalSales - a.totalSales);
+}
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const BANNER_W = Math.round(SCREEN_W * 0.78);
@@ -126,54 +222,108 @@ function PromoBanner({ variant }: { variant: 'coupon' | 'flash' | 'brands' }) {
   );
 }
 
-function FilterChips({ onRefresh }: { onRefresh: () => void }) {
+/** Deal sort + Categories, Coupon, Ratings, Refresh — one horizontal line (scrollable) */
+function HomeFilterStrip({
+  dealTab,
+  onDealTab,
+  onRefresh,
+}: {
+  dealTab: DealTab;
+  onDealTab: (t: DealTab) => void;
+  onRefresh: () => void;
+}) {
   return (
-    <View style={styles.filterRow}>
-      <Pressable style={styles.filterChip}>
-        <Text style={styles.filterChipText}>Categories</Text>
-        <MaterialCommunityIcons name="chevron-down" size={18} color={Brand.black} />
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.filterScroll}
+      contentContainerStyle={styles.filterScrollContent}>
+      {DEAL_TABS.map((tab) => {
+        const active = dealTab === tab;
+        return (
+          <Pressable
+            key={tab}
+            onPress={() => onDealTab(tab)}
+            style={[styles.stripChip, active ? styles.stripChipDealActive : styles.stripChipDeal]}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}>
+            <MaterialCommunityIcons
+              name={tab === 'Nearby' ? 'map-marker-radius' : tab === 'Deals' ? 'fire' : 'sort-variant'}
+              size={15}
+              color={active ? Brand.magenta : Brand.grey}
+            />
+            <Text style={[styles.stripChipText, active && styles.stripChipTextActive]}>{tab}</Text>
+          </Pressable>
+        );
+      })}
+      <View style={styles.stripDivider} />
+      <Pressable style={styles.stripChip}>
+        <Text style={styles.stripChipText}>Categories</Text>
+        <MaterialCommunityIcons name="chevron-down" size={16} color={Brand.black} />
       </Pressable>
-      <Pressable style={[styles.filterChip, styles.filterChipCoupon]}>
-        <MaterialCommunityIcons name="ticket-percent-outline" size={18} color={Brand.magenta} />
-        <Text style={[styles.filterChipText, { color: Brand.magenta }]}>Coupon</Text>
+      <Pressable style={[styles.stripChip, styles.stripChipCoupon]}>
+        <MaterialCommunityIcons name="ticket-percent-outline" size={16} color={Brand.magenta} />
+        <Text style={[styles.stripChipText, styles.stripCouponText]}>Coupon</Text>
       </Pressable>
-      <Pressable style={styles.filterChip}>
-        <Text style={styles.filterChipText}>Ratings</Text>
-        <MaterialCommunityIcons name="chevron-down" size={18} color={Brand.black} />
+      <Pressable style={styles.stripChip}>
+        <MaterialCommunityIcons name="star-outline" size={16} color={Brand.black} />
+        <Text style={styles.stripChipText}>Ratings</Text>
+        <MaterialCommunityIcons name="chevron-down" size={16} color={Brand.black} />
       </Pressable>
-      <Pressable style={styles.filterChip} onPress={onRefresh}>
+      <Pressable style={styles.stripChip} onPress={onRefresh}>
         <MaterialCommunityIcons name="refresh" size={16} color={Brand.black} />
-        <Text style={styles.filterChipText}>Refresh</Text>
+        <Text style={styles.stripChipText}>Refresh</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
-function RestaurantRow({ restaurant, onPress }: { restaurant: NearbyPromo; onPress: () => void }) {
+function DealCardRow({
+  deal,
+  onPress,
+}: {
+  deal: HomeDealCard;
+  onPress: () => void;
+}) {
   return (
-    <Pressable style={styles.promoCard} onPress={onPress}>
-      <Image source={{ uri: restaurant.image }} style={styles.promoImg} />
-      <View style={styles.promoBody}>
-        <Text style={styles.promoTitle} numberOfLines={2}>
-          {restaurant.title}
+    <Pressable style={styles.dealCard} onPress={onPress}>
+      <Image source={{ uri: deal.image }} style={styles.dealImg} />
+      <View style={styles.dealBody}>
+        <Text style={styles.dealTitle} numberOfLines={2}>
+          {deal.title}
         </Text>
-        <View style={styles.metaRow}>
-          <MaterialCommunityIcons name="star" size={16} color={Brand.black} />
-          <Text style={styles.metaText}>{restaurant.rating}</Text>
-          <Text style={styles.metaDot}>•</Text>
-          <Text style={styles.metaText}>{restaurant.category}</Text>
+        <Text style={styles.dealSold}>{deal.sold}</Text>
+        <View style={styles.dealPriceRow}>
+          <Text style={styles.dealPrice}>{deal.price}</Text>
+          {deal.discountTag ? (
+            <View style={styles.dealDiscountPill}>
+              <Text style={styles.dealDiscountText}>{deal.discountTag}</Text>
+            </View>
+          ) : null}
+          {deal.originalPrice ? (
+            <Text style={styles.dealStrike}>{deal.originalPrice}</Text>
+          ) : null}
         </View>
-        <View style={styles.tagRow}>
-          <View style={styles.tagPill}>
-            <Text style={styles.tagText}>{restaurant.tags[0]?.label ?? 'Promo'}</Text>
+        <View style={styles.dealLocDistanceRow}>
+          <View style={styles.dealLocRow}>
+            <MaterialCommunityIcons name="map-marker-outline" size={15} color={Brand.grey} />
+            <Text style={styles.dealLocText} numberOfLines={2}>
+              {deal.placeLabel || 'Inside store'}
+            </Text>
           </View>
-          <View style={[styles.tagPill, styles.tagOrange]}>
-            <Text style={styles.tagText}>{restaurant.distance}</Text>
-          </View>
+          {deal.distanceKm != null ? (
+            <View style={styles.distancePill}>
+              <LinearGradient
+                colors={['rgba(252,210,0,0.55)', Brand.yellowMuted]}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={styles.distancePillGradient}>
+                <MaterialCommunityIcons name="navigation-variant" size={14} color={Brand.magenta} />
+                <Text style={styles.distancePillText}>{formatDistanceKm(deal.distanceKm)}</Text>
+              </LinearGradient>
+            </View>
+          ) : null}
         </View>
-        <Text style={styles.addressText} numberOfLines={2}>
-          {restaurant.address}
-        </Text>
       </View>
     </Pressable>
   );
@@ -186,6 +336,31 @@ export default function HomeScreen() {
   const tabBarH = useBottomTabBarHeight();
   const loginBarOffset = tabBarH + 10;
   const scrollBottomPad = tabBarH + (user ? 24 : 88);
+
+  const [dealTab, setDealTab] = useState<DealTab>('Relevance');
+  const lat = savedLocation?.latitude ?? DEFAULT_MAP_CENTER.latitude;
+  const lon = savedLocation?.longitude ?? DEFAULT_MAP_CENTER.longitude;
+  const filter = FILTER_BY_TAB[dealTab];
+
+  const {
+    data: restaurantsWithDeals = [],
+    isLoading: dealsLoading,
+    isFetching: dealsFetching,
+    error: dealsError,
+    refetch: refetchDeals,
+  } = useGetRestaurantsWithDealsQuery(
+    { lat, lon, filter },
+    { skip: !locationReady }
+  );
+
+  const dealCards = useMemo(
+    () => normalizeDealsFromApi(restaurantsWithDeals),
+    [restaurantsWithDeals]
+  );
+
+  const goRestaurant = (restaurantId: number) => {
+    router.push(`/restaurant/${restaurantId}` as never);
+  };
 
   return (
     <View style={styles.root}>
@@ -238,15 +413,43 @@ export default function HomeScreen() {
         </ScrollView>
 
         <View style={styles.nearbySection}>
-          <Text style={styles.nearbyTitle}>Popular restaurants</Text>
-          <FilterChips onRefresh={() => undefined} />
-          {NEARBY_PROMOS.map((restaurant) => (
-            <RestaurantRow
-              key={restaurant.id}
-              restaurant={restaurant}
-              onPress={() => router.push(`/restaurant/${restaurant.id}` as never)}
-            />
-          ))}
+          <Text style={styles.nearbyTitle}>Recommended for you</Text>
+          <HomeFilterStrip
+            dealTab={dealTab}
+            onDealTab={setDealTab}
+            onRefresh={() => void refetchDeals()}
+          />
+          {!locationReady || dealsLoading ? (
+            <View style={styles.dealsState}>
+              <ActivityIndicator size="small" color={Brand.magenta} />
+              <Text style={styles.dealsStateText}>Loading nearby deals…</Text>
+            </View>
+          ) : dealsError ? (
+            <View style={styles.dealsState}>
+              <Text style={styles.dealsStateTitle}>Could not load deals</Text>
+              <Text style={styles.dealsStateSub}>Check your connection and try again.</Text>
+              <Pressable style={styles.dealsRetryBtn} onPress={() => void refetchDeals()}>
+                <Text style={styles.dealsRetryBtnText}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : dealCards.length === 0 ? (
+            <View style={styles.dealsState}>
+              <Text style={styles.dealsStateText}>No deals found near this location.</Text>
+            </View>
+          ) : (
+            <>
+              {dealsFetching && !dealsLoading ? (
+                <Text style={styles.refreshHint}>Updating…</Text>
+              ) : null}
+              {dealCards.map((deal) => (
+                <DealCardRow
+                  key={deal.key}
+                  deal={deal}
+                  onPress={() => goRestaurant(deal.restaurantId)}
+                />
+              ))}
+            </>
+          )}
         </View>
       </ScrollView>
 
@@ -466,31 +669,210 @@ const styles = StyleSheet.create({
     color: Brand.black,
     marginBottom: 12,
   },
-  filterRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  filterScroll: {
+    marginHorizontal: -H_PAD,
     marginBottom: 14,
   },
-  filterChip: {
+  filterScrollContent: {
+    paddingHorizontal: H_PAD,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 8,
+    paddingBottom: 2,
+  },
+  stripChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingVertical: 9,
+    borderRadius: 22,
     backgroundColor: Brand.white,
     borderWidth: 1,
     borderColor: '#E0E0E0',
   },
-  filterChipCoupon: {
-    borderColor: 'rgba(216,27,96,0.35)',
-    backgroundColor: '#FFF5F8',
+  stripChipDeal: {
+    borderColor: 'rgba(252,210,0,0.85)',
+    backgroundColor: 'rgba(252,210,0,0.22)',
   },
-  filterChipText: {
+  stripChipDealActive: {
+    borderColor: Brand.magenta,
+    backgroundColor: '#FFF5F8',
+    shadowColor: Brand.magenta,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  stripChipText: {
     fontSize: 13,
     fontWeight: '600',
     color: Brand.black,
+  },
+  stripChipTextActive: {
+    color: Brand.magenta,
+  },
+  stripCouponText: {
+    color: Brand.magenta,
+  },
+  stripChipCoupon: {
+    borderColor: 'rgba(216,27,96,0.35)',
+    backgroundColor: '#FFF5F8',
+  },
+  stripDivider: {
+    width: 1,
+    height: 26,
+    backgroundColor: '#E0E0E0',
+    marginHorizontal: 4,
+  },
+  dealsState: {
+    paddingVertical: 28,
+    alignItems: 'center',
+    gap: 8,
+  },
+  dealsStateText: {
+    fontSize: 13,
+    color: Brand.grey,
+    fontWeight: '600',
+  },
+  dealsStateTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Brand.black,
+  },
+  dealsStateSub: {
+    fontSize: 13,
+    color: Brand.grey,
+    textAlign: 'center',
+    paddingHorizontal: 12,
+  },
+  dealsRetryBtn: {
+    marginTop: 4,
+    backgroundColor: Brand.yellow,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 14,
+  },
+  dealsRetryBtnText: {
+    fontWeight: '800',
+    fontSize: 13,
+    color: Brand.black,
+  },
+  refreshHint: {
+    fontSize: 11,
+    color: Brand.grey,
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+  dealCard: {
+    flexDirection: 'row',
+    backgroundColor: Brand.white,
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  dealImg: {
+    width: 128,
+    height: 128,
+    borderRadius: 12,
+    backgroundColor: '#EEE',
+  },
+  dealBody: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+  },
+  dealTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#6B4423',
+    marginBottom: 4,
+  },
+  dealSold: {
+    fontSize: 11,
+    color: Brand.grey,
+    marginBottom: 8,
+  },
+  dealPriceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  dealPrice: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Brand.orangePromo,
+  },
+  dealDiscountPill: {
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  dealDiscountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Brand.orangePromo,
+  },
+  dealStrike: {
+    fontSize: 13,
+    color: '#BDBDBD',
+    textDecorationLine: 'line-through',
+  },
+  dealLocDistanceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 10,
+  },
+  dealLocRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 5,
+    minWidth: 0,
+  },
+  dealLocText: {
+    fontSize: 12,
+    color: Brand.grey,
+    flex: 1,
+    lineHeight: 17,
+    fontWeight: '500',
+  },
+  distancePill: {
+    flexShrink: 0,
+    borderRadius: 14,
+    overflow: 'hidden',
+    alignSelf: 'flex-start',
+    maxWidth: 148,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  distancePillGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(216,27,96,0.22)',
+  },
+  distancePillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: Brand.black,
+    letterSpacing: -0.3,
   },
   promoCard: {
     flexDirection: 'row',
