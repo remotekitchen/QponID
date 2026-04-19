@@ -2,11 +2,13 @@ import { configureStore } from '@reduxjs/toolkit';
 
 import authReducer from '@/store/authSlice';
 import { apiSlice } from '@/store/apiSlice';
+import grouponPurchaseReducer from '@/store/grouponPurchaseSlice';
 import '@/store/grouponApi';
 
 export const store = configureStore({
   reducer: {
     auth: authReducer,
+    grouponPurchase: grouponPurchaseReducer,
     [apiSlice.reducerPath]: apiSlice.reducer,
   },
   middleware: (getDefaultMiddleware) =>

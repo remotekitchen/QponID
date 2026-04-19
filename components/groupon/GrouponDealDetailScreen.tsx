@@ -22,6 +22,7 @@ import { useLocationPicker } from '@/contexts/LocationContext';
 import {
   buildGrouponDetailFromListCache,
   type GrouponDealCategoryItem,
+  type GrouponDealDetail,
   type GrouponDealSummary,
   useGetGrouponDetailsQuery,
   useGetRestaurantsWithDealsQuery,
@@ -55,9 +56,563 @@ function soldLabel(total?: number) {
   return 'New';
 }
 
+/** Deal price, savings, breakdown (below restaurant block) */
+function DealPricingSection({ deal }: { deal: GrouponDealDetail }) {
+  const discountAmount = Number(deal.discount);
+  const originalNum = Number(deal.original_price);
+  const htNum = Number(deal.ht_discount ?? 0);
+  const saveLine =
+    Number.isFinite(discountAmount) && discountAmount > 0
+      ? `Save instantly ${formatTk(discountAmount)}`
+      : 'Save on this deal';
+
+  const avail = deal.total_available;
+  const limitedLabel =
+    avail != null && Number.isFinite(avail)
+      ? `Limited · ${Math.round(avail).toLocaleString('en-BD')} sets avail.`
+      : 'Limited-time offer';
+
+  return (
+    <View>
+      <View style={priceStyles.topRow}>
+        <Text style={priceStyles.flashLabel}>Flash Deal</Text>
+        <LinearGradient
+          colors={['#FF7A00', '#FF2D55']}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={priceStyles.limitedPill}>
+          <Text style={priceStyles.limitedPillText} numberOfLines={1}>
+            {limitedLabel}
+          </Text>
+        </LinearGradient>
+      </View>
+
+      <Text style={priceStyles.dealTitle}>{deal.name}</Text>
+      {deal.highlights?.length ? (
+        <Text style={priceStyles.highlights}>{deal.highlights.join(' · ')}</Text>
+      ) : null}
+
+      <View style={priceStyles.priceRow}>
+        <Text style={priceStyles.saleHuge}>{formatTk(deal.sale_price)}</Text>
+        <Text style={priceStyles.originalStrike}>{formatTk(originalNum)}</Text>
+      </View>
+
+      <LinearGradient
+        colors={['#FF7A00', '#FF2D55']}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={priceStyles.savePill}>
+        <Text style={priceStyles.savePillText}>{saveLine}</Text>
+      </LinearGradient>
+
+      <View style={priceStyles.breakRow}>
+        <View style={priceStyles.breakCol}>
+          <Text style={priceStyles.breakLabel}>Original Price</Text>
+          <Text style={priceStyles.breakValue}>{formatTk(originalNum)}</Text>
+        </View>
+        <View style={priceStyles.breakCol}>
+          <Text style={priceStyles.breakLabel}>Restaurant Discount</Text>
+          <Text style={priceStyles.breakValue}>
+            {Number.isFinite(discountAmount) ? formatTk(discountAmount) : '—'}
+          </Text>
+        </View>
+        <View style={priceStyles.breakCol}>
+          <Text style={priceStyles.breakLabel}>Hungry Tiger Discount</Text>
+          <Text style={priceStyles.breakValue}>{formatTk(htNum)}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Logo, restaurant name, deal subtitle, rating, sold / deals — sits on page bg (no card) */
+function RestaurantIdentitySection({
+  deal,
+  dealsAtStoreCount,
+  onStorePress,
+}: {
+  deal: GrouponDealDetail;
+  dealsAtStoreCount: number;
+  onStorePress: () => void;
+}) {
+  const soldCompact = () => {
+    const t = deal.total_sales ?? 0;
+    if (t >= 1000) return `${(t / 1000).toFixed(t % 1000 === 0 ? 0 : 1)}K+ sold`;
+    if (t > 0) return `${t}+ sold`;
+    return '0+ sold';
+  };
+
+  const subline =
+    (deal.highlights?.length ? deal.highlights.join(' · ') : '') ||
+    deal.categories?.[0]?.category_name ||
+    deal.name;
+
+  return (
+    <View>
+      <Pressable
+        style={restaurantCardStyles.identityRow}
+        onPress={onStorePress}
+        accessibilityRole="button"
+        accessibilityLabel={`${deal.restaurant_name}, view store`}>
+        {deal.restaurant_image ? (
+          <Image source={{ uri: deal.restaurant_image }} style={restaurantCardStyles.logo} />
+        ) : (
+          <View style={restaurantCardStyles.logoPlaceholder}>
+            <MaterialCommunityIcons name="storefront-outline" size={26} color="#9E9E9E" />
+          </View>
+        )}
+        <View style={restaurantCardStyles.identityMid}>
+          <Text style={restaurantCardStyles.storeName} numberOfLines={3}>
+            {deal.restaurant_name}
+          </Text>
+          <Text style={restaurantCardStyles.storeSub} numberOfLines={2}>
+            {subline}
+          </Text>
+        </View>
+        <View style={restaurantCardStyles.ratingCol}>
+          {deal.reviews_count > 0 ? (
+            <>
+              <Text style={restaurantCardStyles.ratingBig}>4.5</Text>
+              <View style={restaurantCardStyles.starReviewsRow}>
+                <MaterialCommunityIcons name="star" size={16} color={Brand.yellow} />
+                <Text style={restaurantCardStyles.reviewsTiny}>{deal.reviews_count} reviews</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <MaterialCommunityIcons name="star-outline" size={22} color="#E0E0E0" />
+              <Text style={restaurantCardStyles.noReviewsYet}>No reviews yet</Text>
+            </>
+          )}
+        </View>
+      </Pressable>
+
+      <View style={restaurantCardStyles.soldDealsRow}>
+        <Text style={restaurantCardStyles.soldLine}>
+          <Text style={priceStyles.soldAccent}>{soldCompact()}</Text>
+          <Text style={priceStyles.idMuted}> · ID: {deal.restaurant}</Text>
+        </Text>
+        <View style={priceStyles.dealsCountPill}>
+          <Text style={priceStyles.dealsCountText}>
+            {dealsAtStoreCount} Deal{dealsAtStoreCount === 1 ? '' : 's'}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function DealValidityLocationSection({
+  deal,
+  addressLine,
+  phone,
+}: {
+  deal: GrouponDealDetail;
+  addressLine: string;
+  phone: string;
+}) {
+  return (
+    <View>
+      <View style={restaurantCardStyles.validRow}>
+        <View style={restaurantCardStyles.validTextWrap}>
+          <Text style={restaurantCardStyles.validGreen}>Active</Text>
+          <Text style={restaurantCardStyles.validBlack}>
+            {' '}
+            · Valid {deal.valid_from} → {deal.valid_to}
+          </Text>
+        </View>
+        <MaterialCommunityIcons name="chevron-right" size={22} color="#BDBDBD" />
+      </View>
+
+      <View style={priceStyles.divider} />
+
+      <View style={restaurantCardStyles.addressBlock}>
+        <Text style={styles.address} numberOfLines={5}>
+          {addressLine || 'Address on request'}
+        </Text>
+        <View style={restaurantCardStyles.addressVDivider} />
+        <View style={restaurantCardStyles.contactActions}>
+          {deal.distance_km != null ? (
+            <View style={restaurantCardStyles.contactItem}>
+              <MaterialCommunityIcons name="map-marker-outline" size={22} color={Brand.black} />
+              <Text style={restaurantCardStyles.contactCaption}>
+                {Number(deal.distance_km) < 10
+                  ? `${Number(deal.distance_km).toFixed(1)} km`
+                  : `${Math.round(Number(deal.distance_km))} km`}
+              </Text>
+            </View>
+          ) : (
+            <View style={restaurantCardStyles.contactItem}>
+              <MaterialCommunityIcons name="map-marker-outline" size={22} color="#BDBDBD" />
+              <Text style={restaurantCardStyles.contactCaptionMuted}>Map</Text>
+            </View>
+          )}
+          {phone ? (
+            <Pressable
+              style={restaurantCardStyles.contactItem}
+              onPress={() => Linking.openURL(`tel:${phone.replace(/\s/g, '')}`)}
+              accessibilityRole="link">
+              <MaterialCommunityIcons name="phone-outline" size={22} color={Brand.black} />
+              <Text style={restaurantCardStyles.contactCaption}>Phone</Text>
+            </Pressable>
+          ) : (
+            <View style={restaurantCardStyles.contactItem}>
+              <MaterialCommunityIcons name="phone-off-outline" size={22} color="#BDBDBD" />
+              <Text style={restaurantCardStyles.contactCaptionMuted}>Phone</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Below hero: restaurant first, then deal pricing, validity/location, tabs — flat on screen bg */
+function DealHeaderUnifiedCard({
+  deal,
+  dealsAtStoreCount,
+  usingListFallback,
+  addressLine,
+  phone,
+  onStorePress,
+  sectionTab,
+  onTabDeals,
+  onTabReviews,
+}: {
+  deal: GrouponDealDetail;
+  dealsAtStoreCount: number;
+  usingListFallback: boolean;
+  addressLine: string;
+  phone: string;
+  onStorePress: () => void;
+  sectionTab: 'deals' | 'reviews';
+  onTabDeals: () => void;
+  onTabReviews: () => void;
+}) {
+  return (
+    <View style={detailStyles.headerStack}>
+      {usingListFallback ? (
+        <View style={[styles.fallbackBanner, { marginBottom: 14 }]}>
+          <MaterialCommunityIcons name="information-outline" size={18} color={Brand.black} />
+          <Text style={styles.fallbackBannerText}>
+            Showing deal from nearby list. Log in to load full detail (menu breakdown & locations).
+          </Text>
+        </View>
+      ) : null}
+
+      <RestaurantIdentitySection
+        deal={deal}
+        dealsAtStoreCount={dealsAtStoreCount}
+        onStorePress={onStorePress}
+      />
+
+      <View style={priceStyles.sectionDivider} />
+
+      <DealPricingSection deal={deal} />
+
+      <View style={priceStyles.sectionDivider} />
+
+      <DealValidityLocationSection deal={deal} addressLine={addressLine} phone={phone} />
+
+      <View style={styles.tabsRowInner}>
+        <Pressable
+          style={[styles.mainTab, sectionTab === 'deals' && styles.mainTabActive]}
+          onPress={onTabDeals}>
+          <Text style={[styles.mainTabText, sectionTab === 'deals' && styles.mainTabTextActive]}>Deals</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.mainTab, sectionTab === 'reviews' && styles.mainTabActive]}
+          onPress={onTabReviews}>
+          <Text style={[styles.mainTabText, sectionTab === 'reviews' && styles.mainTabTextActive]}>Reviews</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+const detailStyles = StyleSheet.create({
+  headerStack: {
+    marginHorizontal: H_PAD,
+    marginTop: -14,
+    paddingTop: 12,
+    paddingBottom: 6,
+  },
+});
+
+const restaurantCardStyles = StyleSheet.create({
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  logo: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F5',
+  },
+  logoPlaceholder: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#F0F0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  identityMid: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 4,
+  },
+  storeName: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: Brand.black,
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+    lineHeight: 22,
+  },
+  storeSub: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    color: Brand.grey,
+    lineHeight: 18,
+  },
+  ratingCol: {
+    alignItems: 'flex-end',
+    minWidth: 72,
+  },
+  ratingBig: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: Brand.black,
+    lineHeight: 30,
+  },
+  starReviewsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  reviewsTiny: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Brand.grey,
+  },
+  noReviewsYet: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: Brand.grey,
+    textAlign: 'right',
+    maxWidth: 76,
+    lineHeight: 14,
+  },
+  soldDealsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 14,
+  },
+  soldLine: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  validRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  validTextWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    paddingRight: 8,
+  },
+  validGreen: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#2E7D32',
+  },
+  validBlack: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Brand.black,
+  },
+  addressBlock: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 0,
+  },
+  addressVDivider: {
+    width: 1,
+    backgroundColor: '#E8E8E8',
+    marginHorizontal: 12,
+    alignSelf: 'stretch',
+    minHeight: 56,
+  },
+  contactActions: {
+    alignItems: 'flex-end',
+    gap: 14,
+  },
+  contactItem: {
+    alignItems: 'center',
+    minWidth: 48,
+  },
+  contactCaption: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '800',
+    color: Brand.black,
+  },
+  contactCaptionMuted: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#BDBDBD',
+  },
+});
+
+const priceStyles = StyleSheet.create({
+  sectionDivider: {
+    height: 1,
+    backgroundColor: '#EEEEEE',
+    marginVertical: 16,
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  flashLabel: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Brand.orangePromo,
+    letterSpacing: 0.3,
+  },
+  limitedPill: {
+    maxWidth: '58%',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  limitedPillText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  dealTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: Brand.black,
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  highlights: {
+    fontSize: 13,
+    color: Brand.grey,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  saleHuge: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: Brand.orangePromo,
+    letterSpacing: -1,
+  },
+  originalStrike: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#BDBDBD',
+    textDecorationLine: 'line-through',
+    marginBottom: 4,
+  },
+  savePill: {
+    borderRadius: 999,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  savePillText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  breakRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 4,
+  },
+  breakCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  breakLabel: {
+    fontSize: 11,
+    color: Brand.grey,
+    fontWeight: '600',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  breakValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Brand.black,
+    textAlign: 'center',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#EEEEEE',
+    marginVertical: 14,
+  },
+  soldAccent: {
+    color: Brand.orangePromo,
+    fontWeight: '800',
+  },
+  idMuted: {
+    color: Brand.grey,
+    fontWeight: '600',
+  },
+  dealsCountPill: {
+    backgroundColor: '#FFE8E0',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    flexShrink: 0,
+  },
+  dealsCountText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#C62828',
+  },
+});
+
 type Props = {
   dealId: string;
 };
+
+function checkoutHref(dealIdProp: string, deal: GrouponDealDetail) {
+  const id = deal.id != null ? String(deal.id) : dealIdProp;
+  const q = new URLSearchParams();
+  q.set('deal', id);
+  q.set('restaurant', String(deal.restaurant));
+  return `/groupon-checkout?${q.toString()}`;
+}
 
 export default function GrouponDealDetailScreen({ dealId }: Props) {
   const router = useRouter();
@@ -199,6 +754,14 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
 
   const pct = discountPercent(deal.original_price, deal.sale_price);
 
+  const handleBuyNow = () => {
+    router.push(checkoutHref(dealId, deal) as never);
+  };
+
+  const handleStorePress = () => {
+    router.push(`/restaurant/${deal.restaurant}` as never);
+  };
+
   return (
     <View style={styles.root}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
@@ -219,6 +782,7 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
       </View>
 
       <ScrollView
+        style={styles.scrollFill}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}>
         <View style={styles.heroWrap}>
@@ -237,77 +801,17 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
           />
         </View>
 
-        <View style={styles.metaCard}>
-          {usingListFallback ? (
-            <View style={styles.fallbackBanner}>
-              <MaterialCommunityIcons name="information-outline" size={18} color={Brand.black} />
-              <Text style={styles.fallbackBannerText}>
-                Showing deal from nearby list. Log in to load full detail (menu breakdown & locations).
-              </Text>
-            </View>
-          ) : null}
-          <Text style={styles.restaurantTitle}>{deal.restaurant_name}</Text>
-          <Text style={styles.dealName}>{deal.name}</Text>
-          {deal.highlights?.length ? (
-            <Text style={styles.categoryHint}>{deal.highlights.join(' · ')}</Text>
-          ) : null}
-
-          {deal.reviews_count > 0 ? (
-            <View style={styles.ratingRow}>
-              <View style={styles.ratingBlock}>
-                <Text style={styles.ratingNum}>4.5</Text>
-                <MaterialCommunityIcons name="star" size={22} color={Brand.yellow} />
-              </View>
-              <Text style={styles.reviewCount}>{deal.reviews_count} reviews</Text>
-            </View>
-          ) : (
-            <Text style={styles.noRating}>No reviews yet</Text>
-          )}
-
-          <View style={styles.openRow}>
-            <Text style={styles.validText}>
-              Valid {deal.valid_from} → {deal.valid_to}
-            </Text>
-            <Pressable>
-              <Text style={styles.detailChevron}>Details {'>'}</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.addressRow}>
-            <Text style={styles.address} numberOfLines={4}>
-              {addressLine || 'Address on request'}
-            </Text>
-            <View style={styles.contactCol}>
-              {deal.distance_km != null ? (
-                <Text style={styles.distanceTxt}>
-                  {Number(deal.distance_km) < 10
-                    ? `${Number(deal.distance_km).toFixed(1)} km`
-                    : `${Math.round(Number(deal.distance_km))} km`}
-                </Text>
-              ) : null}
-              {phone ? (
-                <Pressable
-                  style={styles.phoneFab}
-                  onPress={() => Linking.openURL(`tel:${phone.replace(/\s/g, '')}`)}>
-                  <MaterialCommunityIcons name="phone" size={20} color={Brand.black} />
-                </Pressable>
-              ) : null}
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.tabsRow}>
-          <Pressable
-            style={[styles.mainTab, sectionTab === 'deals' && styles.mainTabActive]}
-            onPress={() => setSectionTab('deals')}>
-            <Text style={[styles.mainTabText, sectionTab === 'deals' && styles.mainTabTextActive]}>Deals</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.mainTab, sectionTab === 'reviews' && styles.mainTabActive]}
-            onPress={() => setSectionTab('reviews')}>
-            <Text style={[styles.mainTabText, sectionTab === 'reviews' && styles.mainTabTextActive]}>Reviews</Text>
-          </Pressable>
-        </View>
+        <DealHeaderUnifiedCard
+          deal={deal}
+          dealsAtStoreCount={1 + moreInStore.length}
+          usingListFallback={usingListFallback}
+          addressLine={addressLine}
+          phone={phone}
+          onStorePress={handleStorePress}
+          sectionTab={sectionTab}
+          onTabDeals={() => setSectionTab('deals')}
+          onTabReviews={() => setSectionTab('reviews')}
+        />
 
         {sectionTab === 'deals' ? (
           <>
@@ -367,19 +871,25 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
           <ReviewsSection reviews={deal.reviews} />
         )}
 
-        <View style={{ height: 88 }} />
+        <View style={{ height: 100 + insets.bottom }} />
       </ScrollView>
 
-      <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
-        <Pressable style={styles.bottomBtnGhost}>
-          <MaterialCommunityIcons name="pencil-outline" size={22} color={Brand.black} />
-          <Text style={styles.bottomBtnText}>Write review</Text>
+      <View style={[styles.buyBarOuter, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <Pressable style={styles.storeCol} onPress={handleStorePress} accessibilityRole="button">
+          <MaterialCommunityIcons name="storefront-outline" size={22} color="#1F2933" />
+          <Text style={styles.storeLabel}>Store</Text>
         </Pressable>
-        <Pressable style={styles.bottomBtnGhost}>
-          <MaterialCommunityIcons name="bookmark-outline" size={22} color={Brand.black} />
-          <Text style={styles.bottomBtnText}>Save</Text>
+        <Pressable style={styles.buyNowTouchable} onPress={handleBuyNow} accessibilityRole="button">
+          <LinearGradient
+            colors={['#FF7A00', '#FF2D55']}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={styles.buyNowGradient}>
+            <Text style={styles.buyNowTitle}>Buy Now {formatTk(deal.sale_price)}</Text>
+            <Text style={styles.buyNowSub}>Instant discount applied at checkout</Text>
+          </LinearGradient>
         </Pressable>
-      </SafeAreaView>
+      </View>
     </View>
   );
 }
@@ -504,6 +1014,7 @@ function ReviewsSection({ reviews }: { reviews: unknown }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Brand.greyLight },
+  scrollFill: { flex: 1 },
   topBar: {
     position: 'absolute',
     top: 0,
@@ -544,69 +1055,26 @@ const styles = StyleSheet.create({
     bottom: 0,
     height: 100,
   },
-  metaCard: {
-    backgroundColor: Brand.white,
-    paddingHorizontal: H_PAD,
-    paddingTop: 16,
-    paddingBottom: 14,
-    gap: 6,
-  },
-  restaurantTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: Brand.black,
-    letterSpacing: -0.3,
-    textTransform: 'uppercase',
-  },
-  dealName: { fontSize: 17, fontWeight: '700', color: Brand.grey, marginTop: 2 },
-  categoryHint: { fontSize: 13, color: Brand.grey, fontWeight: '600' },
-  ratingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 8,
-  },
-  ratingBlock: { flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
-  ratingNum: { fontSize: 36, fontWeight: '900', color: Brand.black, lineHeight: 38 },
-  reviewCount: { fontSize: 15, color: Brand.grey, fontWeight: '600', marginBottom: 4 },
-  openRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 4,
-  },
-  validText: { fontSize: 15, fontWeight: '700', color: '#2E7D32' },
-  detailChevron: { fontSize: 14, color: Brand.grey, fontWeight: '700' },
-  addressRow: { flexDirection: 'row', gap: 12, marginTop: 8, alignItems: 'flex-start' },
   address: { flex: 1, fontSize: 14, color: Brand.black, lineHeight: 21, fontWeight: '600' },
-  contactCol: { alignItems: 'flex-end', gap: 8 },
-  distanceTxt: { fontSize: 14, fontWeight: '800', color: Brand.grey },
-  phoneFab: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Brand.yellowMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabsRow: {
+  /** Deals / Reviews — beneath header sections */
+  tabsRowInner: {
     flexDirection: 'row',
-    backgroundColor: Brand.white,
-    paddingHorizontal: H_PAD,
+    marginTop: 14,
     paddingTop: 8,
     gap: 28,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#DDE1E4',
   },
   mainTab: { borderBottomWidth: 3, borderBottomColor: 'transparent', paddingBottom: 12 },
   mainTabActive: { borderBottomColor: Brand.black },
   mainTabText: { fontSize: 20, color: '#BDBDBD', fontWeight: '800' },
   mainTabTextActive: { color: Brand.black },
   categoryRow: {
+    marginTop: 10,
     paddingHorizontal: H_PAD,
     paddingVertical: 12,
     gap: 10,
-    backgroundColor: Brand.white,
+    backgroundColor: Brand.greyLight,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -685,7 +1153,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(252,210,0,0.8)',
   },
   fallbackBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: Brand.black, lineHeight: 17 },
-  noRating: { fontSize: 14, color: Brand.grey, fontWeight: '600', marginTop: 8 },
   voucherFoot: { fontSize: 12, color: Brand.grey, fontWeight: '600', marginTop: 6 },
   backFloating: {
     position: 'absolute',
@@ -693,18 +1160,48 @@ const styles = StyleSheet.create({
     zIndex: 2,
     backgroundColor: Brand.white,
   },
-  bottomBar: {
+  buyBarOuter: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 10,
     paddingHorizontal: H_PAD,
+    paddingTop: 12,
     backgroundColor: Brand.white,
     borderTopWidth: 1,
-    borderTopColor: '#EEEEEE',
+    borderTopColor: '#F3F4F6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 12,
   },
-  bottomBtnGhost: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, paddingHorizontal: 12 },
-  bottomBtnText: { fontSize: 14, fontWeight: '700', color: Brand.black },
+  storeCol: {
+    alignItems: 'center',
+    marginRight: 14,
+    minWidth: 44,
+  },
+  storeLabel: { fontSize: 10, color: Brand.grey, marginTop: 2, fontWeight: '600' },
+  buyNowTouchable: {
+    flex: 1,
+    minWidth: 0,
+  },
+  buyNowGradient: {
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buyNowTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  buyNowSub: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 10,
+    marginTop: 2,
+    fontWeight: '500',
+  },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, gap: 12, backgroundColor: Brand.greyLight },
   loadingHint: { color: Brand.grey, fontWeight: '600', marginTop: 8 },
   errorTitle: { fontSize: 17, fontWeight: '800', color: Brand.black },
