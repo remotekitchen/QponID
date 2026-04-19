@@ -358,8 +358,8 @@ export default function HomeScreen() {
     [restaurantsWithDeals]
   );
 
-  const goRestaurant = (restaurantId: number) => {
-    router.push(`/restaurant/${restaurantId}` as never);
+  const openGrouponDeal = (dealId: number) => {
+    router.push(`/groupon/${dealId}` as never);
   };
 
   return (
@@ -445,7 +445,7 @@ export default function HomeScreen() {
                 <DealCardRow
                   key={deal.key}
                   deal={deal}
-                  onPress={() => goRestaurant(deal.restaurantId)}
+                  onPress={() => openGrouponDeal(deal.dealId)}
                 />
               ))}
             </>
