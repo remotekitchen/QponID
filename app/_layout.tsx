@@ -62,6 +62,8 @@ function RootLayoutNav() {
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
               <Stack.Screen name="groupon/[dealId]" options={{ headerShown: false }} />
+              <Stack.Screen name="groupon-checkout" options={{ headerShown: false }} />
+              <Stack.Screen name="groupon-voucher" options={{ headerShown: false }} />
             </Stack>
             <LoginModal />
           </AuthProvider>

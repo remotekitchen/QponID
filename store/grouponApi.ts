@@ -22,14 +22,18 @@ export type GrouponDealRow = {
   discount_type?: string;
   restaurant_discount?: number | string;
   discount?: number | string;
+  ht_discount?: number;
   total_sales?: number;
   is_available?: boolean;
   is_deleted?: boolean;
+  total_available?: number;
   description?: string;
   highlights?: string[];
   valid_from?: string;
   valid_to?: string;
   person?: number | null;
+  /** Max vouchers per checkout; 0 often means no limit server-side */
+  max_qty_per_purchase?: number;
 };
 
 /** Single deal detail — `GET api/groupon/v1/deals/:id` */
@@ -87,6 +91,9 @@ export type GrouponDealDetail = {
   distance_km: number | null;
   locations: GrouponLocation[];
   total_sales?: number;
+  total_available?: number;
+  /** From detail API — caps checkout quantity selector */
+  max_qty_per_purchase?: number;
 };
 
 /** Sibling deals in same store */
@@ -139,7 +146,7 @@ export function buildGrouponDetailFromListCache(
       original_price: String(d.original_price ?? ''),
       restaurant_discount: Number(d.restaurant_discount ?? 0),
       discount_type: d.discount_type,
-      ht_discount: 0,
+      ht_discount: Number(d.ht_discount ?? 0),
       sale_price: Number(d.sale_price),
       description: d.description ?? '',
       highlights: d.highlights ?? [],
@@ -157,6 +164,9 @@ export function buildGrouponDetailFromListCache(
         r.distance_km != null && r.distance_km !== '' ? Number(r.distance_km) : null,
       locations: [],
       total_sales: d.total_sales,
+      total_available: d.total_available,
+      max_qty_per_purchase:
+        typeof d.max_qty_per_purchase === 'number' ? d.max_qty_per_purchase : undefined,
     };
 
     const more: GrouponDealSummary[] = siblings.map((s) => ({
@@ -214,9 +224,40 @@ export const grouponApi = apiSlice.injectEndpoints({
         method: 'GET',
       }),
     }),
+    /** Same contract as Hungry Tiger / Remote Kitchen checkout */
+    purchaseGroupon: builder.mutation<
+      {
+        payment_method?: string;
+        gateway_url?: string;
+        transaction_id?: string;
+        session_key?: string;
+        [key: string]: unknown;
+      },
+      { dealId: string; qty: number; payment_method: string }
+    >({
+      query: ({ dealId, qty, payment_method }) => ({
+        url: `api/groupon/v1/deals/${dealId}/buy`,
+        method: 'POST',
+        body: { qty, payment_method },
+      }),
+    }),
+    checkGrouponPaymentStatus: builder.query<
+      unknown,
+      { dealId: string; transactionId: string }
+    >({
+      query: ({ dealId, transactionId }) => ({
+        url: `api/groupon/v1/deals/${dealId}/payment-status/?transaction_id=${encodeURIComponent(transactionId)}`,
+        method: 'GET',
+      }),
+    }),
   }),
   // Dev (Fast Refresh) re-runs this file; allow re-injecting the same endpoint name
   overrideExisting: true,
 });
 
-export const { useGetRestaurantsWithDealsQuery, useGetGrouponDetailsQuery } = grouponApi;
+export const {
+  useGetRestaurantsWithDealsQuery,
+  useGetGrouponDetailsQuery,
+  usePurchaseGrouponMutation,
+  useLazyCheckGrouponPaymentStatusQuery,
+} = grouponApi;
