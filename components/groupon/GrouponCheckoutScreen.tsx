@@ -21,6 +21,8 @@ import { useDispatch } from 'react-redux';
 import { Brand } from '@/constants/Colors';
 import { DEFAULT_MAP_CENTER } from '@/constants/mapDefaults';
 import { useLocationPicker } from '@/contexts/LocationContext';
+import { buildGrouponFunnelPayload } from '@/lib/grouponTracking';
+import { useTrackGrouponFunnelMutation } from '@/store/grouponFunnelApi';
 import { setGrouponPurchase } from '@/store/grouponPurchaseSlice';
 import type { GrouponDealDetail } from '@/store/grouponApi';
 import {
@@ -116,6 +118,7 @@ function PaymentOptionRow({
 export default function GrouponCheckoutScreen() {
   const router = useRouter();
   const dispatch = useDispatch();
+  const [trackGrouponFunnel] = useTrackGrouponFunnelMutation();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ deal?: string | string[] }>();
   const rawDeal = params.deal;
@@ -260,6 +263,31 @@ export default function GrouponCheckoutScreen() {
   const [purchaseGroupon, { isLoading: isPurchasing }] = usePurchaseGrouponMutation();
   const [checkPaymentStatus] = useLazyCheckGrouponPaymentStatusQuery();
 
+  const trackOrderPlaced = useCallback(
+    (paymentMethodForEvent: 'sslcommerz' | 'cash', orderId?: string) => {
+      if (!deal) return;
+      const numericOrderId =
+        typeof orderId === 'string' && Number.isFinite(Number(orderId))
+          ? Number(orderId)
+          : undefined;
+      void buildGrouponFunnelPayload({
+        step: 'place_order',
+        restaurantId: deal.restaurant,
+        dealId: Number(deal.id ?? dealParam),
+        orderId: numericOrderId,
+        meta: {
+          payment_method: paymentMethodForEvent,
+          source: 'groupon_checkout_complete_payment',
+        },
+      })
+        .then((payload) => trackGrouponFunnel(payload).unwrap())
+        .catch(() => {
+          // Silent fail: tracking should not interrupt checkout completion.
+        });
+    },
+    [deal, dealParam, trackGrouponFunnel]
+  );
+
   useEffect(() => {
     pendingPurchaseRef.current = pendingPurchase;
   }, [pendingPurchase]);
@@ -294,6 +322,14 @@ export default function GrouponCheckoutScreen() {
         }).unwrap();
 
         if (isPaymentStatusPaid(latestStatus)) {
+          const latest = latestStatus as Record<string, unknown>;
+          const orderId =
+            typeof latest.id === 'string'
+              ? latest.id
+              : typeof latest.transaction_id === 'string'
+                ? latest.transaction_id
+                : transactionId;
+          trackOrderPlaced('sslcommerz', orderId);
           const payload =
             latestStatus && typeof latestStatus === 'object'
               ? (latestStatus as Record<string, unknown>)
@@ -398,6 +434,13 @@ export default function GrouponCheckoutScreen() {
         return;
       }
 
+      const orderId =
+        typeof record.id === 'string'
+          ? record.id
+          : typeof record.transaction_id === 'string'
+            ? record.transaction_id
+            : undefined;
+      trackOrderPlaced(resolvedMethod === 'sslcommerz' ? 'sslcommerz' : 'cash', orderId);
       navigateToVoucher(record);
     } catch (e: unknown) {
       const detail =
