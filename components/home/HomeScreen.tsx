@@ -22,6 +22,8 @@ import { useLocationPicker } from '@/contexts/LocationContext';
 import { Brand } from '@/constants/Colors';
 import { DEFAULT_MAP_CENTER } from '@/constants/mapDefaults';
 import { HOME_BANNERS, HOME_CATEGORIES, type HomeCategory } from '@/constants/homeMockData';
+import { buildGrouponFunnelPayload } from '@/lib/grouponTracking';
+import { useTrackGrouponFunnelMutation } from '@/store/grouponFunnelApi';
 import {
   type GrouponRestaurantRow,
   useGetRestaurantsWithDealsQuery,
@@ -338,6 +340,7 @@ export default function HomeScreen() {
   const scrollBottomPad = tabBarH + (user ? 24 : 88);
 
   const [dealTab, setDealTab] = useState<DealTab>('Relevance');
+  const [trackGrouponFunnel] = useTrackGrouponFunnelMutation();
   const lat = savedLocation?.latitude ?? DEFAULT_MAP_CENTER.latitude;
   const lon = savedLocation?.longitude ?? DEFAULT_MAP_CENTER.longitude;
   const filter = FILTER_BY_TAB[dealTab];
@@ -358,8 +361,21 @@ export default function HomeScreen() {
     [restaurantsWithDeals]
   );
 
-  const openGrouponDeal = (dealId: number) => {
-    router.push(`/groupon/${dealId}` as never);
+  const openGrouponDeal = (deal: HomeDealCard) => {
+    void buildGrouponFunnelPayload({
+      step: 'front_page',
+      restaurantId: deal.restaurantId,
+      dealId: deal.dealId,
+      meta: {
+        source: 'home_recommended_card',
+        deal_name: deal.title,
+      },
+    })
+      .then((payload) => trackGrouponFunnel(payload).unwrap())
+      .catch(() => {
+        // Tracking failures should not block navigation.
+      });
+    router.push(`/groupon/${deal.dealId}` as never);
   };
 
   return (
@@ -445,7 +461,7 @@ export default function HomeScreen() {
                 <DealCardRow
                   key={deal.key}
                   deal={deal}
-                  onPress={() => openGrouponDeal(deal.dealId)}
+                  onPress={() => openGrouponDeal(deal)}
                 />
               ))}
             </>

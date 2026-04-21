@@ -19,6 +19,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Brand } from '@/constants/Colors';
 import { DEFAULT_MAP_CENTER } from '@/constants/mapDefaults';
 import { useLocationPicker } from '@/contexts/LocationContext';
+import { buildGrouponFunnelPayload } from '@/lib/grouponTracking';
+import { useTrackGrouponFunnelMutation } from '@/store/grouponFunnelApi';
 import {
   buildGrouponDetailFromListCache,
   type GrouponDealCategoryItem,
@@ -616,6 +618,7 @@ function checkoutHref(dealIdProp: string, deal: GrouponDealDetail) {
 
 export default function GrouponDealDetailScreen({ dealId }: Props) {
   const router = useRouter();
+  const [trackGrouponFunnel] = useTrackGrouponFunnelMutation();
   const insets = useSafeAreaInsets();
   const { savedLocation, locationReady } = useLocationPicker();
   const lat = savedLocation?.latitude ?? DEFAULT_MAP_CENTER.latitude;
@@ -755,10 +758,33 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
   const pct = discountPercent(deal.original_price, deal.sale_price);
 
   const handleBuyNow = () => {
+    void buildGrouponFunnelPayload({
+      step: 'add_to_cart',
+      restaurantId: deal.restaurant,
+      dealId: Number(deal.id ?? dealId),
+      meta: {
+        source: 'deal_details_buy_now',
+        sale_price: deal.sale_price,
+      },
+    })
+      .then((payload) => trackGrouponFunnel(payload).unwrap())
+      .catch(() => {
+        // Ignore telemetry failures; continue checkout flow.
+      });
     router.push(checkoutHref(dealId, deal) as never);
   };
 
   const handleStorePress = () => {
+    void buildGrouponFunnelPayload({
+      step: 'store_visit',
+      restaurantId: deal.restaurant,
+      dealId: Number(deal.id ?? dealId),
+      meta: { source: 'deal_details_store_cta' },
+    })
+      .then((payload) => trackGrouponFunnel(payload).unwrap())
+      .catch(() => {
+        // Ignore telemetry failures; continue navigation.
+      });
     router.push(`/restaurant/${deal.restaurant}` as never);
   };
 

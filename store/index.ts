@@ -2,6 +2,7 @@ import { configureStore } from '@reduxjs/toolkit';
 
 import authReducer from '@/store/authSlice';
 import { apiSlice } from '@/store/apiSlice';
+import '@/store/grouponFunnelApi';
 import grouponPurchaseReducer from '@/store/grouponPurchaseSlice';
 import '@/store/grouponApi';
 
