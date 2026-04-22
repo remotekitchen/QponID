@@ -1,5 +1,6 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as AuthSession from 'expo-auth-session';
+import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -27,6 +28,8 @@ import { registerUser } from '@/lib/register';
 type AuthMode = 'login' | 'register';
 type LoginMethod = 'phone' | 'email' | 'google';
 
+WebBrowser.maybeCompleteAuthSession();
+
 export default function LoginModal() {
   const { loginOpen, closeLogin, signInWithBackend } = useAuth();
   const [mode, setMode] = useState<AuthMode>('login');
@@ -42,6 +45,25 @@ export default function LoginModal() {
   const [registering, setRegistering] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
+  const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID?.trim() || '';
+  const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID?.trim() || googleClientId;
+  const googleAndroidClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID?.trim() || googleClientId;
+  const googleExpoClientId = process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID?.trim() || googleClientId;
+  const canUseGoogleAuth = Boolean(
+    googleClientId || googleIosClientId || googleAndroidClientId || googleExpoClientId
+  );
+  const redirectUri = AuthSession.makeRedirectUri();
+  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useAuthRequest({
+    responseType: AuthSession.ResponseType.Code,
+    scopes: ['profile', 'email'],
+    redirectUri,
+    // Keep IDs always defined to avoid provider invariant crashes.
+    iosClientId: googleIosClientId || googleClientId || 'missing-ios-client-id',
+    androidClientId: googleAndroidClientId || googleClientId || 'missing-android-client-id',
+    clientId: googleExpoClientId || googleClientId || 'missing-expo-client-id',
+    webClientId: googleClientId || 'missing-web-client-id',
+  });
 
   const reset = useCallback(() => {
     setMode('login');
@@ -77,8 +99,8 @@ export default function LoginModal() {
       user_info && typeof user_info === 'object'
         ? ((user_info as any).id ?? (user_info as any).user_id ?? (user_info as any).uuid)
         : null;
-    if (typeof id === 'string' && id) {
-      await sendFcmTokenAfterLogin(id, token);
+    if ((typeof id === 'string' || typeof id === 'number') && String(id)) {
+      await sendFcmTokenAfterLogin(String(id), token);
     }
     reset();
     closeLogin();
@@ -105,41 +127,34 @@ export default function LoginModal() {
     }
   };
 
-  const googleLogin = async () => {
+  const completeGoogleLogin = async (params: Record<string, unknown>) => {
     setError(null);
     setGoogleBusy(true);
     try {
-      // NOTE: This uses "Google OAuth via AuthSession" without extra config screens.
-      // You must set the correct redirect/Google client IDs in your Expo project for production.
-      const redirectUri = AuthSession.makeRedirectUri();
-      const discovery = {
-        authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-        tokenEndpoint: 'https://oauth2.googleapis.com/token',
-      };
-
-      const request = new AuthSession.AuthRequest({
-        clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '',
-        redirectUri,
-        scopes: ['openid', 'profile', 'email'],
-        responseType: AuthSession.ResponseType.Token,
-        extraParams: { prompt: 'select_account' },
-      });
-
-      await request.makeAuthUrlAsync(discovery);
-      const result = await request.promptAsync(discovery);
-      if (result.type !== 'success') {
-        if (result.type !== 'dismiss' && result.type !== 'cancel') setError('Google login cancelled.');
+      const code = typeof params.code === 'string' ? params.code : '';
+      if (!code) {
+        setError('Google login failed: no code returned.');
         return;
       }
-      const accessToken =
-        (result.params && typeof (result.params as any).access_token === 'string'
-          ? (result.params as any).access_token
-          : null) ?? null;
+      const tokenResponse = await AuthSession.exchangeCodeAsync(
+        {
+          code,
+          clientId:
+            googleClientId || googleExpoClientId || googleAndroidClientId || googleIosClientId,
+          redirectUri,
+          extraParams: {
+            code_verifier: googleRequest?.codeVerifier || '',
+          },
+        },
+        { tokenEndpoint: 'https://oauth2.googleapis.com/token' }
+      );
+      const accessToken = tokenResponse.accessToken || '';
+      const idToken = tokenResponse.idToken || '';
       if (!accessToken) {
         setError('Google login failed: no access token returned.');
         return;
       }
-      const { token, user_info } = await loginWithGoogle({ accessToken, idToken: '' });
+      const { token, user_info } = await loginWithGoogle({ accessToken, idToken, code });
       await finalizeLogin(token, user_info);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Google login failed.');
@@ -147,6 +162,33 @@ export default function LoginModal() {
       setGoogleBusy(false);
     }
   };
+
+  const googleLogin = async () => {
+    setError(null);
+    if (!canUseGoogleAuth) {
+      setError('Google login is not configured on this build.');
+      return;
+    }
+    if (!googleRequest) {
+      setError('Google login is still preparing. Please try again.');
+      return;
+    }
+    const result = await promptGoogleAsync();
+    if (result.type === 'success') {
+      await completeGoogleLogin(result.params as Record<string, unknown>);
+      return;
+    }
+    if (result.type !== 'dismiss' && result.type !== 'cancel') {
+      setError('Google login cancelled.');
+    }
+  };
+
+  useEffect(() => {
+    if (googleResponse?.type !== 'success') return;
+    const params = googleResponse.params as Record<string, unknown>;
+    void completeGoogleLogin(params);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [googleResponse]);
 
   const register = async () => {
     setError(null);
@@ -363,18 +405,23 @@ export default function LoginModal() {
                   {loginMethod === 'google' ? (
                     <>
                       <Pressable
-                        style={[styles.googleBtn, googleBusy && styles.primaryBtnDisabled]}
+                        style={[
+                          styles.googleBtn,
+                          (googleBusy || !googleRequest || !canUseGoogleAuth) &&
+                            styles.primaryBtnDisabled,
+                        ]}
                         onPress={googleLogin}
-                        disabled={googleBusy}>
+                        disabled={googleBusy || !googleRequest || !canUseGoogleAuth}>
                         {googleBusy ? (
                           <ActivityIndicator color="#333" />
                         ) : (
                           <Text style={styles.googleBtnText}>Continue with Google</Text>
                         )}
                       </Pressable>
-                      {!process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ? (
+                      {!canUseGoogleAuth ? (
                         <Text style={styles.helper}>
-                          Set `EXPO_PUBLIC_GOOGLE_CLIENT_ID` in `.env` to enable Google login.
+                          Set `EXPO_PUBLIC_GOOGLE_CLIENT_ID` (or platform-specific IDs) in `.env`
+                          to enable Google login.
                         </Text>
                       ) : null}
                     </>

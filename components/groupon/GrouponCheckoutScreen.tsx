@@ -412,6 +412,7 @@ export default function GrouponCheckoutScreen() {
         qty: orderQty,
         payment_method: paymentMethod,
       }).unwrap();
+      console.log('[Groupon Checkout] /buy response:', response);
 
       const record = response as Record<string, unknown>;
       const gatewayUrl = typeof record.gateway_url === 'string' ? record.gateway_url : '';
@@ -440,6 +441,12 @@ export default function GrouponCheckoutScreen() {
           : typeof record.transaction_id === 'string'
             ? record.transaction_id
             : undefined;
+      console.log('[Groupon Checkout] resolved order id candidate:', {
+        id: record.id,
+        order_id: record.order_id,
+        transaction_id: record.transaction_id,
+        resolved: orderId,
+      });
       trackOrderPlaced(resolvedMethod === 'sslcommerz' ? 'sslcommerz' : 'cash', orderId);
       navigateToVoucher(record);
     } catch (e: unknown) {

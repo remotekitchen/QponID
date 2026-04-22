@@ -120,6 +120,16 @@ export type GrouponDetailResponse = {
   more_in_store: GrouponDealSummary[];
 };
 
+export type GrouponDealReview = {
+  id?: number;
+  rating?: number;
+  comment?: string;
+  user_name?: string;
+  user?: { name?: string } | null;
+  created_at?: string;
+  [key: string]: unknown;
+};
+
 /**
  * When `GET .../deals/:id` returns 401 (anonymous), build a detail-shaped object
  * from the public list endpoint (same rows as home).
@@ -206,6 +216,19 @@ function normalizeRestaurantsPayload(response: unknown): GrouponRestaurantRow[] 
   return [];
 }
 
+function normalizeDealReviewsPayload(response: unknown): GrouponDealReview[] {
+  if (Array.isArray(response)) return response as GrouponDealReview[];
+  if (
+    response &&
+    typeof response === 'object' &&
+    'results' in response &&
+    Array.isArray((response as { results: unknown }).results)
+  ) {
+    return (response as { results: GrouponDealReview[] }).results;
+  }
+  return [];
+}
+
 export const grouponApi = apiSlice.injectEndpoints({
   endpoints: (builder) => ({
     getRestaurantsWithDeals: builder.query<
@@ -250,6 +273,23 @@ export const grouponApi = apiSlice.injectEndpoints({
         method: 'GET',
       }),
     }),
+    getGrouponDealReviews: builder.query<GrouponDealReview[], { dealId: number }>({
+      query: ({ dealId }) => ({
+        url: `api/groupon/v1/reviews/deal?deal_id=${dealId}`,
+        method: 'GET',
+      }),
+      transformResponse: normalizeDealReviewsPayload,
+    }),
+    submitGrouponStoreReview: builder.mutation<
+      unknown,
+      { order_id: string | number; rating: number; comment?: string }
+    >({
+      query: (body) => ({
+        url: 'api/groupon/v1/reviews/store',
+        method: 'POST',
+        body,
+      }),
+    }),
   }),
   // Dev (Fast Refresh) re-runs this file; allow re-injecting the same endpoint name
   overrideExisting: true,
@@ -260,4 +300,6 @@ export const {
   useGetGrouponDetailsQuery,
   usePurchaseGrouponMutation,
   useLazyCheckGrouponPaymentStatusQuery,
+  useGetGrouponDealReviewsQuery,
+  useSubmitGrouponStoreReviewMutation,
 } = grouponApi;

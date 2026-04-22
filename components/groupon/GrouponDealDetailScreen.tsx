@@ -24,8 +24,10 @@ import { useTrackGrouponFunnelMutation } from '@/store/grouponFunnelApi';
 import {
   buildGrouponDetailFromListCache,
   type GrouponDealCategoryItem,
+  type GrouponDealReview,
   type GrouponDealDetail,
   type GrouponDealSummary,
+  useGetGrouponDealReviewsQuery,
   useGetGrouponDetailsQuery,
   useGetRestaurantsWithDealsQuery,
 } from '@/store/grouponApi';
@@ -660,6 +662,14 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
 
   const [sectionTab, setSectionTab] = useState<'deals' | 'reviews'>('deals');
   const [menuCategory, setMenuCategory] = useState<string>('All');
+  const {
+    data: dealReviews = [],
+    isLoading: isDealReviewsLoading,
+    isFetching: isDealReviewsFetching,
+  } = useGetGrouponDealReviewsQuery(
+    { dealId: dealIdNum },
+    { skip: !validDealId || sectionTab !== 'reviews' }
+  );
 
   const categoryNames = useMemo(() => {
     const names = new Set<string>();
@@ -894,7 +904,10 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
             ) : null}
           </>
         ) : (
-          <ReviewsSection reviews={deal.reviews} />
+          <ReviewsSection
+            reviews={dealReviews.length ? dealReviews : deal.reviews}
+            loading={isDealReviewsLoading || isDealReviewsFetching}
+          />
         )}
 
         <View style={{ height: 100 + insets.bottom }} />
@@ -1019,7 +1032,14 @@ function MoreDealRow({ item, onBuy }: { item: GrouponDealSummary; onBuy: () => v
   );
 }
 
-function ReviewsSection({ reviews }: { reviews: unknown }) {
+function ReviewsSection({ reviews, loading = false }: { reviews: unknown; loading?: boolean }) {
+  if (loading) {
+    return (
+      <View style={styles.reviewCard}>
+        <Text style={styles.reviewBody}>Loading reviews...</Text>
+      </View>
+    );
+  }
   const list = Array.isArray(reviews) ? reviews : [];
   if (list.length === 0) {
     return (
@@ -1030,11 +1050,33 @@ function ReviewsSection({ reviews }: { reviews: unknown }) {
     );
   }
   return (
-    <View style={styles.reviewCard}>
-      <Text style={styles.reviewBody}>
-        {list.length} review{list.length === 1 ? '' : 's'} · detailed list can be wired when review objects are finalized.
-      </Text>
-    </View>
+    <>
+      <View style={styles.reviewCard}>
+        <Text style={styles.reviewTitle}>
+          {list.length} review{list.length === 1 ? '' : 's'}
+        </Text>
+      </View>
+      {list.slice(0, 10).map((raw, index) => {
+        const review = raw as GrouponDealReview;
+        const userName =
+          (typeof review.user_name === 'string' && review.user_name) ||
+          (typeof review.user?.name === 'string' && review.user.name) ||
+          'Guest';
+        const rating =
+          typeof review.rating === 'number' ? Math.max(0, Math.min(5, review.rating)) : 0;
+        const comment =
+          typeof review.comment === 'string' && review.comment.trim()
+            ? review.comment.trim()
+            : 'No written comment.';
+        return (
+          <View key={`${review.id ?? 'review'}-${index}`} style={styles.reviewCard}>
+            <Text style={styles.reviewTitle}>{userName}</Text>
+            <Text style={styles.reviewBody}>Rating: {rating.toFixed(1)} / 5</Text>
+            <Text style={styles.reviewBody}>{comment}</Text>
+          </View>
+        );
+      })}
+    </>
   );
 }
 
