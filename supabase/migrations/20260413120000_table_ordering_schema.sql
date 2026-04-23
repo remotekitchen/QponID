@@ -17,7 +17,7 @@ create policy "profiles_select_own" on public.profiles
 create policy "profiles_update_own" on public.profiles
   for update using (auth.uid() = id);
 
--- ─── Restaurants & floor ─────────────────────────────────────────────────
+-- ─── Restaurants & floor ────────────────────────────────
 create table if not exists public.restaurants (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -114,7 +114,7 @@ create policy "order_items_update_own" on public.order_items
     exists (select 1 from public.orders o where o.id = order_id and o.user_id = auth.uid())
   );
 
--- ─── New auth user → profile row ───────────────────────────────────────────
+-- ─── New auth user → profile row ────
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
