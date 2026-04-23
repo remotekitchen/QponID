@@ -881,6 +881,7 @@ export default function GrouponDealDetailScreen({ dealId }: Props) {
                     voucherSalePrice={deal.sale_price}
                     voucherPct={pct}
                     totalSales={deal.total_sales}
+                    onBuy={handleBuyNow}
                   />
                 ))
               )}
@@ -940,6 +941,7 @@ function IncludedItemRow({
   voucherSalePrice,
   voucherPct,
   totalSales,
+  onBuy,
 }: {
   item: GrouponDealCategoryItem;
   primaryThumb: string | null;
@@ -947,6 +949,7 @@ function IncludedItemRow({
   voucherSalePrice: number;
   voucherPct: number | null;
   totalSales?: number;
+  onBuy: () => void;
 }) {
   const img =
     item.image && item.image.length > 4 ? item.image : primaryThumb || restaurantThumb || '';
@@ -954,7 +957,7 @@ function IncludedItemRow({
   const listPrice = Number(item.price);
 
   return (
-    <View style={styles.menuCard}>
+    <Pressable style={styles.menuCard} onPress={onBuy}>
       <Image
         source={{
           uri:
@@ -984,13 +987,13 @@ function IncludedItemRow({
         </Text>
         <View style={[styles.priceRow, { marginTop: 10 }]}>
           <View />
-          <Pressable style={styles.buyBtn}>
+          <Pressable style={styles.buyBtn} onPress={onBuy}>
             <Text style={styles.buyBtnText}>Buy now</Text>
           </Pressable>
         </View>
         <Text style={styles.soldText}>{soldLabel(totalSales)}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -1001,7 +1004,7 @@ function MoreDealRow({ item, onBuy }: { item: GrouponDealSummary; onBuy: () => v
     'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=200&q=80';
 
   return (
-    <View style={styles.menuCard}>
+    <Pressable style={styles.menuCard} onPress={onBuy}>
       <Image source={{ uri: img }} style={styles.menuImage} />
       <View style={styles.menuBody}>
         <Text style={styles.menuTitle} numberOfLines={2}>
@@ -1028,7 +1031,7 @@ function MoreDealRow({ item, onBuy }: { item: GrouponDealSummary; onBuy: () => v
         </View>
         <Text style={styles.soldText}>{soldLabel(item.total_sales)}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 

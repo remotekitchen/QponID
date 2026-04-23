@@ -12,6 +12,14 @@ export type GrouponRestaurantRow = {
   logo_url?: string | null;
 };
 
+export type GrouponCategory = {
+  key: string;
+  label: string;
+  active_deal_count: number;
+};
+
+export type GrouponListRow = Record<string, unknown>;
+
 export type GrouponDealRow = {
   id: number;
   restaurant?: number;
@@ -216,6 +224,18 @@ function normalizeRestaurantsPayload(response: unknown): GrouponRestaurantRow[] 
   return [];
 }
 
+function normalizeCategoriesPayload(response: unknown): GrouponCategory[] {
+  if (
+    response &&
+    typeof response === 'object' &&
+    'categories' in response &&
+    Array.isArray((response as { categories: unknown }).categories)
+  ) {
+    return (response as { categories: GrouponCategory[] }).categories;
+  }
+  return [];
+}
+
 function normalizeDealReviewsPayload(response: unknown): GrouponDealReview[] {
   if (Array.isArray(response)) return response as GrouponDealReview[];
   if (
@@ -225,6 +245,19 @@ function normalizeDealReviewsPayload(response: unknown): GrouponDealReview[] {
     Array.isArray((response as { results: unknown }).results)
   ) {
     return (response as { results: GrouponDealReview[] }).results;
+  }
+  return [];
+}
+
+function normalizeGrouponListPayload(response: unknown): GrouponListRow[] {
+  if (Array.isArray(response)) return response as GrouponListRow[];
+  if (
+    response &&
+    typeof response === 'object' &&
+    'results' in response &&
+    Array.isArray((response as { results: unknown }).results)
+  ) {
+    return (response as { results: GrouponListRow[] }).results;
   }
   return [];
 }
@@ -240,6 +273,29 @@ export const grouponApi = apiSlice.injectEndpoints({
         method: 'GET',
       }),
       transformResponse: normalizeRestaurantsPayload,
+    }),
+    getGrouponCategories: builder.query<GrouponCategory[], void>({
+      query: () => ({
+        url: 'api/groupon/v1/categories',
+        method: 'GET',
+      }),
+      transformResponse: normalizeCategoriesPayload,
+    }),
+    getGrouponList: builder.query<
+      GrouponListRow[],
+      { category?: string; rating?: number | null }
+    >({
+      query: ({ category, rating }) => {
+        const params = new URLSearchParams();
+        if (category && category !== 'all') params.set('category', category);
+        if (typeof rating === 'number') params.set('rating', String(rating));
+        const qs = params.toString();
+        return {
+          url: `api/groupon/v1/grouponList${qs ? `?${qs}` : ''}`,
+          method: 'GET',
+        };
+      },
+      transformResponse: normalizeGrouponListPayload,
     }),
     getGrouponDetails: builder.query<GrouponDetailResponse, { dealId: string }>({
       query: ({ dealId }) => ({
@@ -297,6 +353,8 @@ export const grouponApi = apiSlice.injectEndpoints({
 
 export const {
   useGetRestaurantsWithDealsQuery,
+  useGetGrouponCategoriesQuery,
+  useGetGrouponListQuery,
   useGetGrouponDetailsQuery,
   usePurchaseGrouponMutation,
   useLazyCheckGrouponPaymentStatusQuery,

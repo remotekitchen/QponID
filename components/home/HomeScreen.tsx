@@ -25,7 +25,11 @@ import { HOME_BANNERS, HOME_CATEGORIES, type HomeCategory } from '@/constants/ho
 import { buildGrouponFunnelPayload } from '@/lib/grouponTracking';
 import { useTrackGrouponFunnelMutation } from '@/store/grouponFunnelApi';
 import {
+  type GrouponCategory,
+  type GrouponListRow,
   type GrouponRestaurantRow,
+  useGetGrouponCategoriesQuery,
+  useGetGrouponListQuery,
   useGetRestaurantsWithDealsQuery,
 } from '@/store/grouponApi';
 
@@ -54,6 +58,16 @@ type HomeDealCard = {
   dealId: number;
   totalSales: number;
 };
+
+type RatingOption = { key: 'all' | '1' | '2' | '3' | '4' | '5'; label: string; value: number | null };
+const RATING_OPTIONS: RatingOption[] = [
+  { key: 'all', label: 'Ratings', value: null },
+  { key: '1', label: '1★+', value: 1 },
+  { key: '2', label: '2★+', value: 2 },
+  { key: '3', label: '3★+', value: 3 },
+  { key: '4', label: '4★+', value: 4 },
+  { key: '5', label: '5★', value: 5 },
+];
 
 /** Pretty distance: meters when under 1 km, otherwise km */
 function formatDistanceKm(km: number): string {
@@ -116,7 +130,74 @@ function normalizeDealsFromApi(restaurants: GrouponRestaurantRow[]): HomeDealCar
       });
     }
   }
-  return rows.sort((a, b) => b.totalSales - a.totalSales);
+  return rows;
+}
+
+function normalizeDealsFromGrouponList(rows: GrouponListRow[]): HomeDealCard[] {
+  const out: HomeDealCard[] = [];
+  rows.forEach((raw, idx) => {
+    const dealId = Number(raw.deal_id ?? raw.id);
+    const restaurantId = Number(raw.restaurant_id ?? raw.restaurant);
+    if (!Number.isFinite(dealId) || !Number.isFinite(restaurantId)) return;
+    const title =
+      String(raw.title ?? raw.name ?? '').trim() ||
+      `${String(raw.restaurant_name ?? 'Restaurant')} | ${String(raw.deal_name ?? 'Deal')}`;
+    const salePriceNum = Number(raw.sale_price ?? raw.price ?? 0);
+    const originalPriceNum = Number(raw.original_price ?? raw.list_price ?? NaN);
+    const totalSales = Number(raw.total_sales ?? raw.sales_count ?? 0) || 0;
+    const distanceRaw = raw.distance_km ?? raw.restaurant_distance_km;
+    const distanceKm =
+      distanceRaw != null && distanceRaw !== '' && Number.isFinite(Number(distanceRaw))
+        ? Number(distanceRaw)
+        : null;
+    const discountTag =
+      typeof raw.discount_label === 'string' && raw.discount_label.trim()
+        ? raw.discount_label
+        : typeof raw.discount === 'string' && raw.discount.trim()
+          ? raw.discount
+          : undefined;
+    out.push({
+      key: `filtered-${restaurantId}-${dealId}-${idx}`,
+      title,
+      sold: `${totalSales}+ sold`,
+      price: `৳${salePriceNum.toLocaleString('en-BD', {
+        maximumFractionDigits: salePriceNum % 1 === 0 ? 0 : 2,
+      })}`,
+      originalPrice:
+        Number.isFinite(originalPriceNum) && originalPriceNum > 0
+          ? `৳${originalPriceNum.toLocaleString('en-BD', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`
+          : undefined,
+      discountTag,
+      image:
+        String(raw.groupon_image || raw.image || raw.banner_url || raw.logo_url || '').trim() ||
+        'https://images.unsplash.com/photo-1543353071-873f17a7a088?auto=format&fit=crop&w=400&q=80',
+      placeLabel: String(raw.location || raw.address || raw.restaurant_location || '').trim(),
+      distanceKm,
+      restaurantId,
+      dealId,
+      totalSales,
+    });
+  });
+  return out;
+}
+
+function sortDealsByTab(cards: HomeDealCard[], tab: DealTab): HomeDealCard[] {
+  const list = [...cards];
+  if (tab === 'Nearby') {
+    return list.sort((a, b) => {
+      const ad = a.distanceKm;
+      const bd = b.distanceKm;
+      if (ad == null && bd == null) return b.totalSales - a.totalSales;
+      if (ad == null) return 1;
+      if (bd == null) return -1;
+      return ad - bd;
+    });
+  }
+  // "Deals" and "Relevance" both keep sales-weighted relevance from backend/business.
+  return list.sort((a, b) => b.totalSales - a.totalSales);
 }
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -228,10 +309,18 @@ function PromoBanner({ variant }: { variant: 'coupon' | 'flash' | 'brands' }) {
 function HomeFilterStrip({
   dealTab,
   onDealTab,
+  selectedCategoryLabel,
+  onCategoryPress,
+  selectedRatingLabel,
+  onRatingPress,
   onRefresh,
 }: {
   dealTab: DealTab;
   onDealTab: (t: DealTab) => void;
+  selectedCategoryLabel: string;
+  onCategoryPress: () => void;
+  selectedRatingLabel: string;
+  onRatingPress: () => void;
   onRefresh: () => void;
 }) {
   return (
@@ -259,17 +348,17 @@ function HomeFilterStrip({
         );
       })}
       <View style={styles.stripDivider} />
-      <Pressable style={styles.stripChip}>
-        <Text style={styles.stripChipText}>Categories</Text>
+      <Pressable style={styles.stripChip} onPress={onCategoryPress}>
+        <Text style={styles.stripChipText}>{selectedCategoryLabel}</Text>
         <MaterialCommunityIcons name="chevron-down" size={16} color={Brand.black} />
       </Pressable>
       <Pressable style={[styles.stripChip, styles.stripChipCoupon]}>
         <MaterialCommunityIcons name="ticket-percent-outline" size={16} color={Brand.magenta} />
         <Text style={[styles.stripChipText, styles.stripCouponText]}>Coupon</Text>
       </Pressable>
-      <Pressable style={styles.stripChip}>
+      <Pressable style={styles.stripChip} onPress={onRatingPress}>
         <MaterialCommunityIcons name="star-outline" size={16} color={Brand.black} />
-        <Text style={styles.stripChipText}>Ratings</Text>
+        <Text style={styles.stripChipText}>{selectedRatingLabel}</Text>
         <MaterialCommunityIcons name="chevron-down" size={16} color={Brand.black} />
       </Pressable>
       <Pressable style={styles.stripChip} onPress={onRefresh}>
@@ -332,26 +421,69 @@ export default function HomeScreen() {
   const scrollBottomPad = tabBarH + (user ? 24 : 88);
 
   const [dealTab, setDealTab] = useState<DealTab>('Relevance');
+  const [isCategoryOpen, setIsCategoryOpen] = useState(false);
+  const [isRatingOpen, setIsRatingOpen] = useState(false);
+  const [selectedCategoryKey, setSelectedCategoryKey] = useState<string>('all');
+  const [selectedRatingKey, setSelectedRatingKey] = useState<RatingOption['key']>('all');
   const [trackGrouponFunnel] = useTrackGrouponFunnelMutation();
   const lat = savedLocation?.latitude ?? DEFAULT_MAP_CENTER.latitude;
   const lon = savedLocation?.longitude ?? DEFAULT_MAP_CENTER.longitude;
+  const {
+    data: grouponCategories = [],
+    isLoading: categoriesLoading,
+  } = useGetGrouponCategoriesQuery();
+  const categoryOptions = useMemo(
+    () => [{ key: 'all', label: 'Categories', active_deal_count: 0 }, ...grouponCategories],
+    [grouponCategories]
+  );
+  const selectedCategory =
+    categoryOptions.find((c) => c.key === selectedCategoryKey) || categoryOptions[0];
+  const selectedCategoryLabel = selectedCategory?.label || 'Categories';
+  const selectedRating = RATING_OPTIONS.find((r) => r.key === selectedRatingKey) || RATING_OPTIONS[0];
+  const selectedRatingLabel = selectedRating.label;
+  const hasExtraFilters = selectedCategoryKey !== 'all' || selectedRating.value !== null;
   const filter = FILTER_BY_TAB[dealTab];
 
   const {
     data: restaurantsWithDeals = [],
-    isLoading: dealsLoading,
-    isFetching: dealsFetching,
-    error: dealsError,
+    isLoading: baseDealsLoading,
+    isFetching: baseDealsFetching,
+    error: baseDealsError,
     refetch: refetchDeals,
   } = useGetRestaurantsWithDealsQuery(
     { lat, lon, filter },
-    { skip: !locationReady }
+    { skip: !locationReady || hasExtraFilters }
+  );
+  const {
+    data: grouponListDeals = [],
+    isLoading: listLoading,
+    isFetching: listFetching,
+    error: listError,
+    refetch: refetchGrouponList,
+  } = useGetGrouponListQuery(
+    {
+      category: selectedCategoryKey !== 'all' ? selectedCategoryKey : undefined,
+      rating: selectedRating.value,
+    },
+    { skip: !hasExtraFilters }
   );
 
-  const dealCards = useMemo(
-    () => normalizeDealsFromApi(restaurantsWithDeals),
-    [restaurantsWithDeals]
-  );
+  const dealCards = useMemo(() => {
+    const base = hasExtraFilters
+      ? normalizeDealsFromGrouponList(grouponListDeals)
+      : normalizeDealsFromApi(restaurantsWithDeals);
+    return sortDealsByTab(base, dealTab);
+  }, [hasExtraFilters, grouponListDeals, restaurantsWithDeals, dealTab]);
+  const dealsLoading = hasExtraFilters ? listLoading : baseDealsLoading;
+  const dealsFetching = hasExtraFilters ? listFetching : baseDealsFetching;
+  const dealsError = hasExtraFilters ? listError : baseDealsError;
+  const handleRefreshDeals = () => {
+    if (hasExtraFilters) {
+      void refetchGrouponList();
+      return;
+    }
+    void refetchDeals();
+  };
 
   const openGrouponDeal = (deal: HomeDealCard) => {
     void buildGrouponFunnelPayload({
@@ -425,8 +557,76 @@ export default function HomeScreen() {
           <HomeFilterStrip
             dealTab={dealTab}
             onDealTab={setDealTab}
-            onRefresh={() => void refetchDeals()}
+            selectedCategoryLabel={selectedCategoryLabel}
+            onCategoryPress={() => {
+              setIsCategoryOpen((v) => !v);
+              setIsRatingOpen(false);
+            }}
+            selectedRatingLabel={selectedRatingLabel}
+            onRatingPress={() => {
+              setIsRatingOpen((v) => !v);
+              setIsCategoryOpen(false);
+            }}
+            onRefresh={handleRefreshDeals}
           />
+          {isCategoryOpen ? (
+            <View style={styles.categoryDropdown}>
+              {categoriesLoading ? (
+                <View style={styles.categoryOptionRow}>
+                  <ActivityIndicator size="small" color={Brand.magenta} />
+                  <Text style={styles.categoryOptionText}>Loading categories...</Text>
+                </View>
+              ) : (
+                categoryOptions.map((cat: GrouponCategory | { key: string; label: string; active_deal_count: number }) => {
+                  const active = selectedCategoryKey === cat.key;
+                  const countLabel =
+                    typeof cat.active_deal_count === 'number' && cat.active_deal_count > 0
+                      ? ` (${cat.active_deal_count})`
+                      : '';
+                  return (
+                    <Pressable
+                      key={cat.key}
+                      style={[styles.categoryOptionRow, active && styles.categoryOptionRowActive]}
+                      onPress={() => {
+                        setSelectedCategoryKey(cat.key);
+                        setIsCategoryOpen(false);
+                      }}>
+                      <Text style={[styles.categoryOptionText, active && styles.categoryOptionTextActive]}>
+                        {cat.label}
+                        {countLabel}
+                      </Text>
+                      {active ? (
+                        <MaterialCommunityIcons name="check" size={16} color={Brand.magenta} />
+                      ) : null}
+                    </Pressable>
+                  );
+                })
+              )}
+            </View>
+          ) : null}
+          {isRatingOpen ? (
+            <View style={styles.categoryDropdown}>
+              {RATING_OPTIONS.map((r) => {
+                const active = selectedRatingKey === r.key;
+                return (
+                  <Pressable
+                    key={r.key}
+                    style={[styles.categoryOptionRow, active && styles.categoryOptionRowActive]}
+                    onPress={() => {
+                      setSelectedRatingKey(r.key);
+                      setIsRatingOpen(false);
+                    }}>
+                    <Text style={[styles.categoryOptionText, active && styles.categoryOptionTextActive]}>
+                      {r.label}
+                    </Text>
+                    {active ? (
+                      <MaterialCommunityIcons name="check" size={16} color={Brand.magenta} />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
           {!locationReady || dealsLoading ? (
             <View style={styles.dealsState}>
               <ActivityIndicator size="small" color={Brand.magenta} />
@@ -732,6 +932,35 @@ const styles = StyleSheet.create({
     height: 26,
     backgroundColor: '#E0E0E0',
     marginHorizontal: 4,
+  },
+  categoryDropdown: {
+    marginTop: -6,
+    marginBottom: 12,
+    backgroundColor: Brand.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+    overflow: 'hidden',
+  },
+  categoryOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F1F1',
+  },
+  categoryOptionRowActive: {
+    backgroundColor: '#FFF5F8',
+  },
+  categoryOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Brand.black,
+  },
+  categoryOptionTextActive: {
+    color: Brand.magenta,
   },
   dealsState: {
     paddingVertical: 28,
