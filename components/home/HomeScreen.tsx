@@ -296,33 +296,25 @@ function DealCardRow({
         </Text>
         <Text style={styles.dealSold}>{deal.sold}</Text>
         <View style={styles.dealPriceRow}>
-          <Text style={styles.dealPrice}>{deal.price}</Text>
-          {deal.discountTag ? (
-            <View style={styles.dealDiscountPill}>
-              <Text style={styles.dealDiscountText}>{deal.discountTag}</Text>
+          <View style={styles.priceCol}>
+            <Text style={styles.dealPrice}>{deal.price}</Text>
+            <View style={styles.priceMetaRow}>
+              {deal.originalPrice ? <Text style={styles.dealStrike}>{deal.originalPrice}</Text> : null}
+              {deal.discountTag ? <Text style={styles.dealDiscountText}>{deal.discountTag}</Text> : null}
             </View>
-          ) : null}
-          {deal.originalPrice ? (
-            <Text style={styles.dealStrike}>{deal.originalPrice}</Text>
-          ) : null}
+          </View>
         </View>
         <View style={styles.dealLocDistanceRow}>
           <View style={styles.dealLocRow}>
-            <MaterialCommunityIcons name="map-marker-outline" size={15} color={Brand.grey} />
+            <MaterialCommunityIcons name="map-marker-outline" size={14} color="#8A8A8A" />
             <Text style={styles.dealLocText} numberOfLines={2}>
               {deal.placeLabel || 'Inside store'}
             </Text>
           </View>
           {deal.distanceKm != null ? (
-            <View style={styles.distancePill}>
-              <LinearGradient
-                colors={['rgba(252,210,0,0.55)', Brand.yellowMuted]}
-                start={{ x: 0, y: 0.5 }}
-                end={{ x: 1, y: 0.5 }}
-                style={styles.distancePillGradient}>
-                <MaterialCommunityIcons name="navigation-variant" size={14} color={Brand.magenta} />
-                <Text style={styles.distancePillText}>{formatDistanceKm(deal.distanceKm)}</Text>
-              </LinearGradient>
+            <View style={styles.distanceTextRow}>
+              <MaterialCommunityIcons name="navigation-variant" size={12} color={Brand.magenta} />
+              <Text style={styles.distanceTextPlain}>{formatDistanceKm(deal.distanceKm)}</Text>
             </View>
           ) : null}
         </View>
@@ -822,26 +814,34 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 10,
   },
-  dealPrice: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: Brand.orangePromo,
+  priceCol: {
+    justifyContent: 'center',
+    gap: 1,
   },
-  dealDiscountPill: {
-    backgroundColor: '#FFF3E0',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
+  priceMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dealPrice: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#C62828',
   },
   dealDiscountText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Brand.orangePromo,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#C62828',
   },
   dealStrike: {
     fontSize: 13,
+    lineHeight: 14,
     color: '#BDBDBD',
+    fontWeight: '600',
     textDecorationLine: 'line-through',
+    textDecorationColor: '#BDBDBD',
+    textDecorationStyle: 'solid',
+    marginBottom: 1,
   },
   dealLocDistanceRow: {
     flexDirection: 'row',
@@ -857,38 +857,25 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   dealLocText: {
-    fontSize: 12,
-    color: Brand.grey,
+    fontSize: 13,
+    color: '#4A4A4A',
     flex: 1,
-    lineHeight: 17,
-    fontWeight: '500',
+    lineHeight: 15,
+    fontWeight: '600',
+    maxWidth: 76,
   },
-  distancePill: {
+  distanceTextRow: {
     flexShrink: 0,
-    borderRadius: 14,
-    overflow: 'hidden',
-    alignSelf: 'flex-start',
-    maxWidth: 148,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  distancePillGradient: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(216,27,96,0.22)',
+    gap: 4,
+    alignSelf: 'flex-start',
   },
-  distancePillText: {
+  distanceTextPlain: {
     fontSize: 12,
-    fontWeight: '800',
-    color: Brand.black,
-    letterSpacing: -0.3,
+    fontWeight: '900',
+    color: Brand.magenta,
+    letterSpacing: 0,
   },
   promoCard: {
     flexDirection: 'row',
