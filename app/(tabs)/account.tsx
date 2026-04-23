@@ -1,11 +1,38 @@
+import React, { useEffect, useState } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Brand } from '@/constants/Colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { maskPhone } from '@/lib/phone';
+import { getReviewsByUser, type StoredRestaurantReview } from '@/lib/restaurantReviews';
 
 export default function AccountScreen() {
   const { user, authLoading, openLogin, signOut } = useAuth();
+  const [showMyReviews, setShowMyReviews] = useState(false);
+  const [myReviews, setMyReviews] = useState<StoredRestaurantReview[]>([]);
+  const [loadingMyReviews, setLoadingMyReviews] = useState(false);
+
+  const loadMyReviews = async () => {
+    if (!user) {
+      setMyReviews([]);
+      return;
+    }
+    setLoadingMyReviews(true);
+    const reviews = await getReviewsByUser(user.id, user.phone);
+    setMyReviews(reviews);
+    setLoadingMyReviews(false);
+  };
+
+  useEffect(() => {
+    void loadMyReviews();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  useEffect(() => {
+    if (!showMyReviews || !user) return;
+    void loadMyReviews();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMyReviews, user]);
 
   if (authLoading) {
     return (
@@ -17,8 +44,16 @@ export default function AccountScreen() {
 
   const phoneLabel = user?.phone ? maskPhone(user.phone) : null;
 
+  const toggleMyReviews = () => {
+    if (!user) {
+      openLogin();
+      return;
+    }
+    setShowMyReviews((v) => !v);
+  };
+
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.containerContent}>
       <View style={styles.headerCard}>
         <View style={styles.avatarWrap}>
           <MaterialCommunityIcons name="account-circle" size={56} color="#E5D76A" />
@@ -64,10 +99,39 @@ export default function AccountScreen() {
 
       <View style={styles.menuCard}>
         <MenuRow icon="bookmark-outline" label="My Favourites" />
-        <MenuRow icon="star-outline" label="My Reviews" />
+        <MenuRow
+          icon="star-outline"
+          label="My Reviews"
+          onPress={toggleMyReviews}
+          trailingIcon={showMyReviews ? 'chevron-up' : 'chevron-right'}
+        />
         <MenuRow icon="help-circle-outline" label="Help Center" />
         <MenuRow icon="cog-outline" label="Settings" />
       </View>
+
+      {showMyReviews ? (
+        <View style={styles.reviewsCard}>
+          <Text style={styles.reviewsTitle}>My Reviews</Text>
+          {loadingMyReviews ? (
+            <ActivityIndicator size="small" color={Brand.black} />
+          ) : myReviews.length === 0 ? (
+            <Text style={styles.emptyReviewsText}>You have not reviewed any restaurant yet.</Text>
+          ) : (
+            myReviews.map((review) => (
+              <View key={review.id} style={styles.reviewRow}>
+                <View style={styles.reviewTop}>
+                  <Text style={styles.reviewRestaurant} numberOfLines={1}>
+                    {review.restaurantTitle}
+                  </Text>
+                  <Text style={styles.reviewDate}>{new Date(review.createdAt).toLocaleDateString()}</Text>
+                </View>
+                <Text style={styles.reviewStars}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</Text>
+                <Text style={styles.reviewComment}>{review.comment}</Text>
+              </View>
+            ))
+          )}
+        </View>
+      ) : null}
 
       <Text style={styles.versionText}>Version v2.26.0</Text>
 
@@ -80,18 +144,28 @@ export default function AccountScreen() {
           <Text style={styles.mainBtnText}>Log out</Text>
         </Pressable>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
-function MenuRow({ icon, label }: { icon: React.ComponentProps<typeof MaterialCommunityIcons>['name']; label: string }) {
+function MenuRow({
+  icon,
+  label,
+  onPress,
+  trailingIcon = 'chevron-right',
+}: {
+  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+  label: string;
+  onPress?: () => void;
+  trailingIcon?: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+}) {
   return (
-    <Pressable style={styles.menuRow}>
+    <Pressable style={styles.menuRow} onPress={onPress}>
       <View style={styles.menuLeft}>
         <MaterialCommunityIcons name={icon} size={20} color={Brand.black} />
         <Text style={styles.menuLabel}>{label}</Text>
       </View>
-      <MaterialCommunityIcons name="chevron-right" size={20} color="#9A9A9A" />
+      <MaterialCommunityIcons name={trailingIcon} size={20} color="#9A9A9A" />
     </Pressable>
   );
 }
@@ -100,7 +174,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8F8F8',
+  },
+  containerContent: {
     padding: 14,
+    paddingBottom: 22,
   },
   centered: {
     justifyContent: 'center',
@@ -190,6 +267,58 @@ const styles = StyleSheet.create({
     backgroundColor: Brand.white,
     borderRadius: 14,
     overflow: 'hidden',
+  },
+  reviewsCard: {
+    marginTop: 10,
+    backgroundColor: Brand.white,
+    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  reviewsTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Brand.black,
+    marginTop: 4,
+  },
+  emptyReviewsText: {
+    fontSize: 12,
+    color: '#808080',
+    paddingBottom: 8,
+  },
+  reviewRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    paddingTop: 8,
+    paddingBottom: 6,
+    gap: 3,
+  },
+  reviewTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  reviewRestaurant: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: Brand.black,
+  },
+  reviewDate: {
+    fontSize: 11,
+    color: '#8D8D8D',
+  },
+  reviewStars: {
+    fontSize: 12,
+    color: '#F59E0B',
+    fontWeight: '700',
+  },
+  reviewComment: {
+    fontSize: 12,
+    color: '#454545',
+    lineHeight: 17,
   },
   menuRow: {
     flexDirection: 'row',

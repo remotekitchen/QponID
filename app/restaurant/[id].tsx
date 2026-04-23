@@ -1,11 +1,13 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Brand } from '@/constants/Colors';
 import { NEARBY_PROMOS, RESTAURANT_DETAILS } from '@/constants/homeMockData';
+import { useAuth } from '@/contexts/AuthContext';
+import { addRestaurantReview, getRestaurantReviews, type StoredRestaurantReview } from '@/lib/restaurantReviews';
 
 type SectionTab = 'discount' | 'reviews';
 
@@ -14,16 +16,80 @@ const formatRupiah = (value: number) => `Rp${value.toLocaleString('id-ID')}`;
 export default function RestaurantDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { user, openLogin } = useAuth();
   const restaurant = NEARBY_PROMOS.find((item) => item.id === id);
   const detail = id ? RESTAURANT_DETAILS[id] : undefined;
   const [sectionTab, setSectionTab] = useState<SectionTab>('discount');
   const [menuCategory, setMenuCategory] = useState(detail?.menuCategories[0]?.id ?? 'all');
+  const [reviews, setReviews] = useState<StoredRestaurantReview[]>([]);
+  const [reviewName, setReviewName] = useState('');
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewRating, setReviewRating] = useState(5);
 
   const visibleItems = useMemo(() => {
     if (!detail) return [];
     if (menuCategory === 'all') return detail.menuItems;
     return detail.menuItems.filter((item) => item.categoryId === menuCategory);
   }, [detail, menuCategory]);
+
+  useEffect(() => {
+    const loadReviews = async () => {
+      if (!id) return;
+      const loaded = await getRestaurantReviews(id);
+      setReviews(loaded);
+    };
+    void loadReviews();
+  }, [id]);
+
+  useEffect(() => {
+    if (reviewName.trim()) return;
+    if (!user) return;
+    const fallbackName = user.phone ? `User ${user.phone.slice(-4)}` : 'User';
+    setReviewName(fallbackName);
+  }, [user, reviewName]);
+
+  const baseReviewCount = restaurant?.reviewCount ?? 0;
+  const baseRatingValue = Number.parseFloat(restaurant?.rating?.split('(')[0] ?? '0') || 0;
+  const totalReviewCount = baseReviewCount + reviews.length;
+  const reviewSum = reviews.reduce((sum, review) => sum + review.rating, 0);
+  const totalRatingValue =
+    totalReviewCount > 0
+      ? (baseRatingValue * baseReviewCount + reviewSum) / totalReviewCount
+      : 0;
+
+  const submitReview = async () => {
+    if (!id) return;
+    if (!user) {
+      Alert.alert('Login required', 'Please login first to submit a review.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Login', onPress: openLogin },
+      ]);
+      return;
+    }
+    if (!reviewName.trim()) {
+      Alert.alert('Missing name', 'Please enter your name before submitting a review.');
+      return;
+    }
+    if (!reviewComment.trim()) {
+      Alert.alert('Missing comment', 'Please share your experience in the comment box.');
+      return;
+    }
+    const newReview: StoredRestaurantReview = {
+      id: `${Date.now()}`,
+      restaurantId: id,
+      restaurantTitle: restaurant?.title ?? 'Restaurant',
+      userId: user.id,
+      userPhone: user.phone,
+      userName: reviewName.trim(),
+      rating: reviewRating,
+      comment: reviewComment.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    const updated = await addRestaurantReview(newReview);
+    setReviews(updated);
+    setReviewComment('');
+    Alert.alert('Thanks!', 'Your review has been submitted.');
+  };
 
   if (!restaurant || !detail) {
     return (
@@ -67,8 +133,8 @@ export default function RestaurantDetailScreen() {
           ) : null}
           <Text style={styles.title}>{restaurant.title}</Text>
           <View style={styles.ratingRow}>
-            <Text style={styles.ratingValue}>{restaurant.rating}</Text>
-            <Text style={styles.reviewText}>{restaurant.reviewCount} reviews</Text>
+            <Text style={styles.ratingValue}>{totalRatingValue.toFixed(1)}</Text>
+            <Text style={styles.reviewText}>{totalReviewCount} reviews</Text>
           </View>
           <View style={styles.openRow}>
             <Text style={styles.openText}>Open {restaurant.openHours}</Text>
@@ -157,11 +223,58 @@ export default function RestaurantDetailScreen() {
             </View>
           </>
         ) : (
-          <View style={styles.reviewCard}>
-            <Text style={styles.reviewTitle}>Reviews coming soon</Text>
-            <Text style={styles.reviewBody}>
-              This is static frontend only for now. Real reviews can be connected when you add your API.
-            </Text>
+          <View style={styles.reviewSection}>
+            <View style={styles.reviewCard}>
+              <Text style={styles.reviewTitle}>Write a review</Text>
+              <TextInput
+                value={reviewName}
+                onChangeText={setReviewName}
+                placeholder="Your name"
+                placeholderTextColor="#9E9E9E"
+                style={styles.reviewInput}
+              />
+              <View style={styles.starRow}>
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <Pressable key={value} onPress={() => setReviewRating(value)}>
+                    <MaterialCommunityIcons
+                      name={value <= reviewRating ? 'star' : 'star-outline'}
+                      size={26}
+                      color={value <= reviewRating ? '#F59E0B' : '#BDBDBD'}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+              <TextInput
+                value={reviewComment}
+                onChangeText={setReviewComment}
+                placeholder="Tell others about your experience"
+                placeholderTextColor="#9E9E9E"
+                multiline
+                style={styles.reviewCommentInput}
+              />
+              <Pressable style={styles.reviewSubmitBtn} onPress={() => void submitReview()}>
+                <Text style={styles.reviewSubmitText}>Submit review</Text>
+              </Pressable>
+              {!user ? <Text style={styles.reviewHint}>Please login to submit your review.</Text> : null}
+            </View>
+
+            <View style={styles.reviewCard}>
+              <Text style={styles.reviewTitle}>User reviews</Text>
+              {reviews.length === 0 ? (
+                <Text style={styles.reviewBody}>No user reviews yet. Be the first one to comment.</Text>
+              ) : (
+                reviews.map((review) => (
+                  <View key={review.id} style={styles.reviewItem}>
+                    <View style={styles.reviewItemHead}>
+                      <Text style={styles.reviewUser}>{review.userName}</Text>
+                      <Text style={styles.reviewItemDate}>{new Date(review.createdAt).toLocaleDateString()}</Text>
+                    </View>
+                    <Text style={styles.reviewItemRating}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</Text>
+                    <Text style={styles.reviewBody}>{review.comment}</Text>
+                  </View>
+                ))
+              )}
+            </View>
           </View>
         )}
       </ScrollView>
@@ -243,9 +356,45 @@ const styles = StyleSheet.create({
   },
   buyBtnText: { fontSize: 18, fontWeight: '900', color: Brand.black },
   soldText: { textAlign: 'right', color: Brand.grey, fontSize: 14, marginTop: 4 },
+  reviewSection: { marginHorizontal: 16, marginTop: 8, gap: 10 },
   reviewCard: { marginHorizontal: 16, marginTop: 8, backgroundColor: Brand.white, borderRadius: 14, padding: 14, gap: 8 },
   reviewTitle: { fontSize: 18, fontWeight: '800', color: Brand.black },
   reviewBody: { fontSize: 14, color: Brand.grey, lineHeight: 20 },
+  reviewInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: Brand.black,
+  },
+  reviewCommentInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 90,
+    textAlignVertical: 'top',
+    fontSize: 14,
+    color: Brand.black,
+  },
+  starRow: { flexDirection: 'row', gap: 8, marginVertical: 2 },
+  reviewSubmitBtn: {
+    marginTop: 4,
+    backgroundColor: Brand.black,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  reviewSubmitText: { color: Brand.white, fontWeight: '700', fontSize: 14 },
+  reviewHint: { fontSize: 12, color: Brand.grey, marginTop: 2 },
+  reviewItem: { borderTopWidth: 1, borderTopColor: '#EEEEEE', paddingTop: 10, gap: 4 },
+  reviewItemHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  reviewUser: { fontSize: 14, fontWeight: '700', color: Brand.black },
+  reviewItemDate: { fontSize: 12, color: Brand.grey },
+  reviewItemRating: { fontSize: 14, color: '#F59E0B' },
   emptyWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Brand.greyLight, gap: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: Brand.black },
   emptyBtn: { backgroundColor: Brand.black, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 9 },
