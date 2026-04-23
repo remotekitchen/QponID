@@ -6,6 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSelector } from 'react-redux';
 
 import { Brand } from '@/constants/Colors';
+import { useAuth } from '@/contexts/AuthContext';
+import { addRestaurantReview } from '@/lib/restaurantReviews';
 import { useSubmitGrouponStoreReviewMutation } from '@/store/grouponApi';
 import type { RootState } from '@/store';
 
@@ -69,6 +71,7 @@ function extractApiErrorMessage(error: unknown): string | null {
 
 export default function GrouponVoucherScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const purchaseData = useSelector((s: RootState) => s.grouponPurchase.purchase);
   const dealInfo = useSelector((s: RootState) => s.grouponPurchase.deal);
   const [submitReview, { isLoading: isSubmittingReview }] =
@@ -133,6 +136,21 @@ export default function GrouponVoucherScreen() {
         rating,
         comment: comment.trim() || undefined,
       }).unwrap();
+
+      if (user) {
+        await addRestaurantReview({
+          id: `groupon-${Date.now()}`,
+          restaurantId: `groupon-${dealInfo?.restaurant ?? 'store'}`,
+          restaurantTitle: dealInfo?.restaurant_name || 'Restaurant',
+          userId: user.id,
+          userPhone: user.phone,
+          userName: user.phone ? `User ${user.phone.slice(-4)}` : 'User',
+          rating,
+          comment: comment.trim() || `Rated ${rating}/5`,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
       setReviewSuccess('Thank you! Your review was submitted.');
       setComment('');
     } catch (e) {
