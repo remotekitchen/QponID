@@ -18,7 +18,7 @@
       "bundleIdentifier": "com.hungrytiger.app"
     },
     "android": {
-      "package": "com.hungrytiger.app",
+      "package": "com.hungrytigernew.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FCD200"
