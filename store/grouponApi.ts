@@ -13,8 +13,12 @@ export type GrouponRestaurantRow = {
 };
 
 export type GrouponCategory = {
+  id?: number;
   key: string;
   label: string;
+  image?: string | null;
+  is_active?: boolean;
+  sort_order?: number;
   active_deal_count: number;
 };
 
@@ -266,17 +270,25 @@ export const grouponApi = apiSlice.injectEndpoints({
   endpoints: (builder) => ({
     getRestaurantsWithDeals: builder.query<
       GrouponRestaurantRow[],
-      { lat: number; lon: number; filter: string }
+      { lat: number; lon: number; filter: string; category?: string }
     >({
-      query: ({ lat, lon, filter }) => ({
-        url: `api/groupon/v1/deals/restaurants-with-deals/?lat=${lat}&lon=${lon}&filter=${encodeURIComponent(filter)}`,
-        method: 'GET',
-      }),
+      query: ({ lat, lon, filter, category }) => {
+        const params = new URLSearchParams({
+          lat: String(lat),
+          lon: String(lon),
+          filter,
+        });
+        if (category && category !== 'all') params.set('category', category);
+        return {
+          url: `api/groupon/v1/deals/restaurants-with-deals/?${params.toString()}`,
+          method: 'GET',
+        };
+      },
       transformResponse: normalizeRestaurantsPayload,
     }),
     getGrouponCategories: builder.query<GrouponCategory[], void>({
       query: () => ({
-        url: 'api/groupon/v1/categories',
+        url: 'api/groupon/v1/categories/deals',
         method: 'GET',
       }),
       transformResponse: normalizeCategoriesPayload,
