@@ -3,7 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -21,11 +21,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useLocationPicker } from '@/contexts/LocationContext';
 import { Brand } from '@/constants/Colors';
 import { DEFAULT_MAP_CENTER } from '@/constants/mapDefaults';
-import { HOME_BANNERS, HOME_CATEGORIES, type HomeCategory } from '@/constants/homeMockData';
+import NearbyDealsSection from '@/components/home/NearbyDealsSection';
+import CategoryGridSection, { type HomeGridCategory } from '@/components/home/CategoryGridSection';
+import RestaurantDealGroupRow from '@/components/home/RestaurantDealGroupRow';
+import { type HomeCategory } from '@/constants/homeMockData';
 import { buildGrouponFunnelPayload } from '@/lib/grouponTracking';
 import { useTrackGrouponFunnelMutation } from '@/store/grouponFunnelApi';
 import {
-  type GrouponCategory,
   type GrouponListRow,
   type GrouponRestaurantRow,
   useGetGrouponCategoriesQuery,
@@ -33,13 +35,12 @@ import {
   useGetRestaurantsWithDealsQuery,
 } from '@/store/grouponApi';
 
-const DEAL_TABS = ['Relevance', 'Nearby', 'Deals'] as const;
+const DEAL_TABS = ['Relevance', 'Nearby'] as const;
 type DealTab = (typeof DEAL_TABS)[number];
 
 const FILTER_BY_TAB: Record<DealTab, string> = {
   Relevance: 'all',
   Nearby: 'nearby',
-  Deals: 'deals',
 };
 
 type HomeDealCard = {
@@ -57,16 +58,28 @@ type HomeDealCard = {
   restaurantId: number;
   dealId: number;
   totalSales: number;
+  rating: number | null;
+  categoryLabel: string;
+  /** When `discount_type === 'percentage'`, show this in the list (e.g. 10 → -10%) */
+  percentOffApi: number | null;
+  /** For grouped card header image */
+  logoUrl: string | null;
+  reviewCount: number | null;
 };
 
-type RatingOption = { key: 'all' | '1' | '2' | '3' | '4' | '5'; label: string; value: number | null };
+type RatingOption = {
+  key: 'all' | '1' | '2' | '3' | '4' | '5';
+  label: string;
+  value: number | null;
+  stars?: string;
+};
 const RATING_OPTIONS: RatingOption[] = [
-  { key: 'all', label: 'Ratings', value: null },
-  { key: '1', label: '1★+', value: 1 },
-  { key: '2', label: '2★+', value: 2 },
-  { key: '3', label: '3★+', value: 3 },
-  { key: '4', label: '4★+', value: 4 },
-  { key: '5', label: '5★', value: 5 },
+  { key: 'all', label: 'All ratings', value: null, stars: '' },
+  { key: '1', label: 'and up', value: 1, stars: '★' },
+  { key: '2', label: 'and up', value: 2, stars: '★★' },
+  { key: '3', label: 'and up', value: 3, stars: '★★★' },
+  { key: '4', label: 'and up', value: 4, stars: '★★★★' },
+  { key: '5', label: 'only', value: 5, stars: '★★★★★' },
 ];
 
 /** Pretty distance: meters when under 1 km, otherwise km */
@@ -127,6 +140,34 @@ function normalizeDealsFromApi(restaurants: GrouponRestaurantRow[]): HomeDealCar
         restaurantId: restaurant.id,
         dealId: deal.id,
         totalSales,
+        rating:
+          Number.isFinite(Number((deal as { rating?: unknown }).rating))
+            ? Number((deal as { rating?: unknown }).rating)
+            : Number.isFinite(Number((restaurant as { groupon_rating?: unknown }).groupon_rating))
+              ? Number((restaurant as { groupon_rating?: unknown }).groupon_rating)
+              : Number.isFinite(Number((restaurant as { average_rating?: unknown }).average_rating))
+                ? Number((restaurant as { average_rating?: unknown }).average_rating)
+                : null,
+        categoryLabel:
+          Array.isArray((restaurant as { cuisines?: unknown[] }).cuisines) &&
+          (restaurant as { cuisines?: unknown[] }).cuisines!.length > 0
+            ? String((restaurant as { cuisines?: unknown[] }).cuisines![0] ?? 'Food')
+            : 'Food',
+        percentOffApi:
+          deal.discount_type === 'percentage' && deal.restaurant_discount != null
+            ? Math.round(Number(deal.restaurant_discount))
+            : null,
+        logoUrl:
+          typeof (restaurant as { logo_url?: unknown }).logo_url === 'string'
+            ? (restaurant as { logo_url: string | null }).logo_url
+            : null,
+        reviewCount: (() => {
+          const r = restaurant as unknown as { reviews_count?: unknown };
+          if (r.reviews_count != null && Number.isFinite(Number(r.reviews_count))) {
+            return Math.max(0, Math.round(Number(r.reviews_count)));
+          }
+          return null;
+        })(),
       });
     }
   }
@@ -179,6 +220,20 @@ function normalizeDealsFromGrouponList(rows: GrouponListRow[]): HomeDealCard[] {
       restaurantId,
       dealId,
       totalSales,
+      rating:
+        raw.rating != null && Number.isFinite(Number(raw.rating)) ? Number(raw.rating) : null,
+      categoryLabel:
+        typeof raw.cuisine === 'string' && raw.cuisine.trim()
+          ? raw.cuisine
+          : typeof raw.category === 'string' && raw.category.trim()
+            ? raw.category
+            : 'Food',
+      percentOffApi: null,
+      logoUrl: typeof raw.logo_url === 'string' ? raw.logo_url : null,
+      reviewCount:
+        raw.reviews_count != null && Number.isFinite(Number(raw.reviews_count))
+          ? Math.max(0, Math.round(Number(raw.reviews_count)))
+          : null,
     });
   });
   return out;
@@ -200,21 +255,75 @@ function sortDealsByTab(cards: HomeDealCard[], tab: DealTab): HomeDealCard[] {
   return list.sort((a, b) => b.totalSales - a.totalSales);
 }
 
-const { width: SCREEN_W } = Dimensions.get('window');
-const BANNER_W = Math.round(SCREEN_W * 0.78);
-const BANNER_GAP = 12;
-const H_PAD = 16;
+const MAX_DEALS_SHOWN_PER_RESTAURANT = 2;
 
-const categoryIcon = (icon: HomeCategory['icon']) => {
-  const map: Record<HomeCategory['icon'], keyof typeof MaterialCommunityIcons.glyphMap> = {
-    cup: 'cup-outline',
-    food: 'silverware-fork-knife',
-    store: 'storefront-outline',
-    gamepad: 'gamepad-variant-outline',
-    gift: 'gift-outline',
-  };
-  return map[icon];
-};
+/** Qpon list: max 2 deal lines, but we keep total count for UI ("Showing 2 of 5"). */
+function groupDealsByRestaurantQpon(
+  cards: HomeDealCard[]
+): { key: string; deals: HomeDealCard[]; totalDeals: number }[] {
+  const map = new Map<number, HomeDealCard[]>();
+  const order: number[] = [];
+  const seen = new Set<number>();
+  for (const c of cards) {
+    if (!seen.has(c.restaurantId)) {
+      seen.add(c.restaurantId);
+      order.push(c.restaurantId);
+    }
+    const arr = map.get(c.restaurantId) ?? [];
+    arr.push(c);
+    map.set(c.restaurantId, arr);
+  }
+  return order.map((id) => {
+    const allSorted = [...(map.get(id) ?? [])].sort((a, b) => b.totalSales - a.totalSales);
+    const totalDeals = allSorted.length;
+    return {
+      key: `grp-${id}`,
+      deals: allSorted.slice(0, MAX_DEALS_SHOWN_PER_RESTAURANT),
+      totalDeals,
+    };
+  });
+}
+
+
+const { width: SCREEN_W } = Dimensions.get('window');
+const H_PAD = 16;
+const TOP_CARD_GAP = 6;
+const TOP_CARD_W = Math.floor((SCREEN_W - H_PAD * 2 - TOP_CARD_GAP * 2) / 3);
+const QUICK_CATEGORY_FALLBACKS: HomeCategory[] = [
+  { id: '1', label: 'Coffee & Tea', icon: 'cup' },
+  { id: '2', label: 'Dessert & Bakery', icon: 'food' },
+  { id: '3', label: 'Gourmet Food', icon: 'food' },
+  { id: '4', label: 'Leisure', icon: 'gamepad' },
+  { id: '5', label: 'Welfare', icon: 'gift' },
+  { id: '6', label: 'Invite Friends', icon: 'gift' },
+  { id: '7', label: 'Buy More Get More', icon: 'store' },
+  { id: '8', label: 'New Store', icon: 'store' },
+];
+
+/** Top 3 cards — fixed Qpon-style layout (do not override with live deal titles). */
+const QPON_STYLE_TOP_PROMOS = [
+  {
+    id: 'qpon-1',
+    variant: 'coupon' as const,
+    title: 'Tofu Singapore',
+    subtitle: 'Up to 35% off',
+    image:
+      'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=600&q=80',
+  },
+  {
+    id: 'qpon-2',
+    variant: 'flash' as const,
+    title: 'Flash Sale',
+    subtitle: 'Up to 62% off',
+  },
+  {
+    id: 'qpon-3',
+    variant: 'brands' as const,
+    title: 'Brand pavilion',
+    subtitle: 'Surprise big brand deals',
+  },
+] as const;
+
 
 function LogoMark() {
   return (
@@ -235,93 +344,117 @@ function SearchField() {
       <TextInput
         value={q}
         onChangeText={setQ}
-        placeholder="What sounds good today?"
+        placeholder="J Chicken"
         placeholderTextColor="#9E9E9E"
         style={styles.searchInput}
         returnKeyType="search"
       />
+      <MaterialCommunityIcons name="line-scan" size={18} color="#9E9E9E" />
     </View>
   );
 }
 
-function CategoryItem({ item }: { item: HomeCategory }) {
-  return (
-    <Pressable style={styles.catItem}>
-      <View style={styles.catCircle}>
-        <MaterialCommunityIcons name={categoryIcon(item.icon)} size={26} color={Brand.black} />
-      </View>
-      <Text style={styles.catLabel} numberOfLines={1}>
-        {item.label}
-      </Text>
-    </Pressable>
-  );
+/** Countdown for flash-sale card (visual only). */
+function useFlashCountdown(initialSec = 1551) {
+  const [sec, setSec] = useState(initialSec);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSec((s) => (s <= 0 ? initialSec : s - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [initialSec]);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-function PromoBanner({ variant }: { variant: 'coupon' | 'flash' | 'brands' }) {
-  if (variant === 'coupon') {
-    return (
-      <View style={[styles.bannerCard, styles.bannerYellow]}>
-        <View style={styles.bannerTextCol}>
-          <Text style={styles.bannerTitle}>Special offer for you</Text>
-          <Text style={styles.bannerSub}>Join now</Text>
-          <Pressable style={styles.bannerCtaCircle}>
-            <MaterialCommunityIcons name="arrow-right" size={22} color="#fff" />
-          </Pressable>
-        </View>
-        <Text style={styles.bannerEmoji} accessibilityLabel="Mascot">
-          🐯
+function QponSandCard({ item }: { item: Extract<(typeof QPON_STYLE_TOP_PROMOS)[number], { variant: 'coupon' }> }) {
+  return (
+    <View style={[styles.qponCard, styles.qponCardSand]}>
+      <View style={styles.qponCardHeader}>
+        <Text style={styles.qponCardTitleDark} numberOfLines={2}>
+          {item.title}
+        </Text>
+        <Text style={styles.qponCardSubDark} numberOfLines={2}>
+          {item.subtitle}
         </Text>
       </View>
-    );
-  }
-  if (variant === 'flash') {
-    return (
-      <LinearGradient colors={[Brand.pinkHot, Brand.magenta]} style={[styles.bannerCard, styles.bannerGradient]}>
-        <View style={styles.bannerTextCol}>
-          <Text style={styles.bannerTitleLight}>Flash sale</Text>
-          <Text style={styles.bannerSubLight}>Up to 95% off</Text>
-          <View style={styles.timerPill}>
-            <MaterialCommunityIcons name="alarm" size={18} color={Brand.black} />
-            <Text style={styles.timerText}>02:44:02</Text>
-          </View>
-        </View>
-        <Text style={styles.bannerEmoji}>⏰</Text>
-      </LinearGradient>
-    );
-  }
-  return (
-    <View style={[styles.bannerCard, styles.bannerOrange]}>
-      <View style={styles.bannerTextCol}>
-        <Text style={styles.bannerTitle}>Brands</Text>
-        <Text style={styles.bannerSub}>Great offers</Text>
-        <View style={styles.brandDots}>
-          <View style={[styles.brandDot, { backgroundColor: '#E4002B' }]} />
-          <View style={[styles.brandDot, { backgroundColor: '#4CAF50' }]} />
-          <View style={[styles.brandDot, { backgroundColor: Brand.magenta }]} />
-        </View>
+      <View style={styles.qponCardImageWrap}>
+        <Image source={{ uri: item.image }} style={styles.qponCardImage} resizeMode="cover" />
+        <Pressable style={styles.qponCardFab} accessibilityRole="button">
+          <MaterialCommunityIcons name="arrow-right" size={20} color="#fff" />
+        </Pressable>
       </View>
-      <Text style={styles.bannerEmoji}>🏷️</Text>
     </View>
   );
+}
+
+function QponFlashCard({ item }: { item: Extract<(typeof QPON_STYLE_TOP_PROMOS)[number], { variant: 'flash' }> }) {
+  const flashClock = useFlashCountdown(1551);
+  return (
+    <LinearGradient
+      colors={['#FF7A9A', '#E91E63', '#C2185B']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={[styles.qponCard, styles.qponCardFlash]}>
+      <View style={styles.qponFlashTimerBar}>
+        <Text style={styles.qponFlashTimerText}>{flashClock}</Text>
+      </View>
+      <Text style={styles.qponCardTitleLight} numberOfLines={1}>
+        {item.title}
+      </Text>
+      <Text style={styles.qponCardSubLight} numberOfLines={2}>
+        {item.subtitle}
+      </Text>
+      <View style={styles.qponFlashArtRow}>
+        <MaterialCommunityIcons name="alarm-light" size={44} color="#FFEB3B" />
+      </View>
+    </LinearGradient>
+  );
+}
+
+function QponBrandsCard({ item }: { item: Extract<(typeof QPON_STYLE_TOP_PROMOS)[number], { variant: 'brands' }> }) {
+  return (
+    <View style={[styles.qponCard, styles.qponCardOrange]}>
+      <Text style={styles.qponCardTitleOnOrange} numberOfLines={2}>
+        {item.title}
+      </Text>
+      <Text style={styles.qponCardSubOnOrange} numberOfLines={2}>
+        {item.subtitle}
+      </Text>
+      <View style={styles.qponBrandRow}>
+        <View style={[styles.qponBrandChip, { backgroundColor: '#E4002B' }]}>
+          <Text style={styles.qponBrandChipText}>KFC</Text>
+        </View>
+        <View style={[styles.qponBrandChip, { backgroundColor: '#F57C00' }]}>
+          <Text style={styles.qponBrandChipText}>BK</Text>
+        </View>
+        <View style={[styles.qponBrandChip, { backgroundColor: '#43A047' }]}>
+          <Text style={styles.qponBrandChipText}>+</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function QponTopPromoCard({ item }: { item: (typeof QPON_STYLE_TOP_PROMOS)[number] }) {
+  if (item.variant === 'coupon') return <QponSandCard item={item} />;
+  if (item.variant === 'flash') return <QponFlashCard item={item} />;
+  return <QponBrandsCard item={item} />;
 }
 
 /** Deal sort + Categories, Coupon, Ratings, Refresh — one horizontal line (scrollable) */
 function HomeFilterStrip({
   dealTab,
   onDealTab,
-  selectedCategoryLabel,
-  onCategoryPress,
   selectedRatingLabel,
   onRatingPress,
-  onRefresh,
 }: {
   dealTab: DealTab;
   onDealTab: (t: DealTab) => void;
-  selectedCategoryLabel: string;
-  onCategoryPress: () => void;
   selectedRatingLabel: string;
   onRatingPress: () => void;
-  onRefresh: () => void;
 }) {
   return (
     <ScrollView
@@ -339,7 +472,7 @@ function HomeFilterStrip({
             accessibilityRole="button"
             accessibilityState={{ selected: active }}>
             <MaterialCommunityIcons
-              name={tab === 'Nearby' ? 'map-marker-radius' : tab === 'Deals' ? 'fire' : 'sort-variant'}
+              name={tab === 'Nearby' ? 'map-marker-radius' : 'sort-variant'}
               size={15}
               color={active ? Brand.magenta : Brand.grey}
             />
@@ -347,68 +480,12 @@ function HomeFilterStrip({
           </Pressable>
         );
       })}
-      <View style={styles.stripDivider} />
-      <Pressable style={styles.stripChip} onPress={onCategoryPress}>
-        <Text style={styles.stripChipText}>{selectedCategoryLabel}</Text>
-        <MaterialCommunityIcons name="chevron-down" size={16} color={Brand.black} />
-      </Pressable>
-      <Pressable style={[styles.stripChip, styles.stripChipCoupon]}>
-        <MaterialCommunityIcons name="ticket-percent-outline" size={16} color={Brand.magenta} />
-        <Text style={[styles.stripChipText, styles.stripCouponText]}>Coupon</Text>
-      </Pressable>
       <Pressable style={styles.stripChip} onPress={onRatingPress}>
         <MaterialCommunityIcons name="star-outline" size={16} color={Brand.black} />
         <Text style={styles.stripChipText}>{selectedRatingLabel}</Text>
         <MaterialCommunityIcons name="chevron-down" size={16} color={Brand.black} />
       </Pressable>
-      <Pressable style={styles.stripChip} onPress={onRefresh}>
-        <MaterialCommunityIcons name="refresh" size={16} color={Brand.black} />
-        <Text style={styles.stripChipText}>Refresh</Text>
-      </Pressable>
     </ScrollView>
-  );
-}
-
-function DealCardRow({
-  deal,
-  onPress,
-}: {
-  deal: HomeDealCard;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable style={styles.dealCard} onPress={onPress}>
-      <Image source={{ uri: deal.image }} style={styles.dealImg} />
-      <View style={styles.dealBody}>
-        <Text style={styles.dealTitle} numberOfLines={2}>
-          {deal.title}
-        </Text>
-        <Text style={styles.dealSold}>{deal.sold}</Text>
-        <View style={styles.dealPriceRow}>
-          <View style={styles.priceCol}>
-            <Text style={styles.dealPrice}>{deal.price}</Text>
-            <View style={styles.priceMetaRow}>
-              {deal.originalPrice ? <Text style={styles.dealStrike}>{deal.originalPrice}</Text> : null}
-              {deal.discountTag ? <Text style={styles.dealDiscountText}>{deal.discountTag}</Text> : null}
-            </View>
-          </View>
-        </View>
-        <View style={styles.dealLocDistanceRow}>
-          <View style={styles.dealLocRow}>
-            <MaterialCommunityIcons name="map-marker-outline" size={14} color="#8A8A8A" />
-            <Text style={styles.dealLocText} numberOfLines={2}>
-              {deal.placeLabel || 'Inside store'}
-            </Text>
-          </View>
-          {deal.distanceKm != null ? (
-            <View style={styles.distanceTextRow}>
-              <MaterialCommunityIcons name="navigation-variant" size={12} color={Brand.magenta} />
-              <Text style={styles.distanceTextPlain}>{formatDistanceKm(deal.distanceKm)}</Text>
-            </View>
-          ) : null}
-        </View>
-      </View>
-    </Pressable>
   );
 }
 
@@ -421,27 +498,16 @@ export default function HomeScreen() {
   const scrollBottomPad = tabBarH + (user ? 24 : 88);
 
   const [dealTab, setDealTab] = useState<DealTab>('Relevance');
-  const [isCategoryOpen, setIsCategoryOpen] = useState(false);
   const [isRatingOpen, setIsRatingOpen] = useState(false);
-  const [selectedCategoryKey, setSelectedCategoryKey] = useState<string>('all');
   const [selectedRatingKey, setSelectedRatingKey] = useState<RatingOption['key']>('all');
+  const [selectedCategoryKey, setSelectedCategoryKey] = useState<string>('all');
   const [trackGrouponFunnel] = useTrackGrouponFunnelMutation();
   const lat = savedLocation?.latitude ?? DEFAULT_MAP_CENTER.latitude;
   const lon = savedLocation?.longitude ?? DEFAULT_MAP_CENTER.longitude;
-  const {
-    data: grouponCategories = [],
-    isLoading: categoriesLoading,
-  } = useGetGrouponCategoriesQuery();
-  const categoryOptions = useMemo(
-    () => [{ key: 'all', label: 'Categories', active_deal_count: 0 }, ...grouponCategories],
-    [grouponCategories]
-  );
-  const selectedCategory =
-    categoryOptions.find((c) => c.key === selectedCategoryKey) || categoryOptions[0];
-  const selectedCategoryLabel = selectedCategory?.label || 'Categories';
+  const { data: grouponCategories = [] } = useGetGrouponCategoriesQuery();
   const selectedRating = RATING_OPTIONS.find((r) => r.key === selectedRatingKey) || RATING_OPTIONS[0];
   const selectedRatingLabel = selectedRating.label;
-  const hasExtraFilters = selectedCategoryKey !== 'all' || selectedRating.value !== null;
+  const hasExtraFilters = selectedRating.value !== null;
   const filter = FILTER_BY_TAB[dealTab];
 
   const {
@@ -451,9 +517,15 @@ export default function HomeScreen() {
     error: baseDealsError,
     refetch: refetchDeals,
   } = useGetRestaurantsWithDealsQuery(
-    { lat, lon, filter },
+    {
+      lat,
+      lon,
+      filter: selectedRating.value !== null ? 'rating' : filter,
+      category: selectedCategoryKey !== 'all' ? selectedCategoryKey : undefined,
+    },
     { skip: !locationReady || hasExtraFilters }
   );
+
   const {
     data: grouponListDeals = [],
     isLoading: listLoading,
@@ -477,13 +549,21 @@ export default function HomeScreen() {
   const dealsLoading = hasExtraFilters ? listLoading : baseDealsLoading;
   const dealsFetching = hasExtraFilters ? listFetching : baseDealsFetching;
   const dealsError = hasExtraFilters ? listError : baseDealsError;
-  const handleRefreshDeals = () => {
-    if (hasExtraFilters) {
-      void refetchGrouponList();
-      return;
+  const quickCategories = useMemo<HomeGridCategory[]>(() => {
+    if (grouponCategories.length > 0) {
+      const sorted = [...grouponCategories].sort(
+        (a, b) => Number(a.sort_order ?? 999) - Number(b.sort_order ?? 999)
+      );
+      return sorted.slice(0, 8).map((cat, idx) => ({
+        id: String(cat.key),
+        label: cat.label,
+        image: cat.image ?? null,
+        icon: QUICK_CATEGORY_FALLBACKS[idx % QUICK_CATEGORY_FALLBACKS.length].icon,
+      }));
     }
-    void refetchDeals();
-  };
+    return QUICK_CATEGORY_FALLBACKS;
+  }, [grouponCategories]);
+  const groupedDealRows = useMemo(() => groupDealsByRestaurantQpon(dealCards), [dealCards]);
 
   const openGrouponDeal = (deal: HomeDealCard) => {
     void buildGrouponFunnelPayload({
@@ -532,133 +612,50 @@ export default function HomeScreen() {
         style={styles.scroll}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPad }]}
         showsVerticalScrollIndicator={false}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.catList}>
-          {HOME_CATEGORIES.map((item) => (
-            <CategoryItem key={item.id} item={item} />
-          ))}
-        </ScrollView>
+        <CategoryGridSection
+          categories={quickCategories}
+          selectedCategoryKey={selectedCategoryKey}
+          onSelectCategory={(key) => {
+            setSelectedCategoryKey((prev) => (prev === key ? 'all' : key));
+          }}
+        />
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.bannerList}>
-          {HOME_BANNERS.map((item) => (
-            <View key={item.id} style={{ width: BANNER_W, marginRight: BANNER_GAP }}>
-              <PromoBanner variant={item.variant} />
+        <View style={styles.bannerList}>
+          {QPON_STYLE_TOP_PROMOS.map((item) => (
+            <View key={item.id} style={styles.bannerItem}>
+              <QponTopPromoCard item={item} />
             </View>
           ))}
-        </ScrollView>
-
-        <View style={styles.nearbySection}>
-          <Text style={styles.nearbyTitle}>Recommended for you</Text>
-          <HomeFilterStrip
-            dealTab={dealTab}
-            onDealTab={setDealTab}
-            selectedCategoryLabel={selectedCategoryLabel}
-            onCategoryPress={() => {
-              setIsCategoryOpen((v) => !v);
-              setIsRatingOpen(false);
-            }}
-            selectedRatingLabel={selectedRatingLabel}
-            onRatingPress={() => {
-              setIsRatingOpen((v) => !v);
-              setIsCategoryOpen(false);
-            }}
-            onRefresh={handleRefreshDeals}
-          />
-          {isCategoryOpen ? (
-            <View style={styles.categoryDropdown}>
-              {categoriesLoading ? (
-                <View style={styles.categoryOptionRow}>
-                  <ActivityIndicator size="small" color={Brand.magenta} />
-                  <Text style={styles.categoryOptionText}>Loading categories...</Text>
-                </View>
-              ) : (
-                categoryOptions.map((cat: GrouponCategory | { key: string; label: string; active_deal_count: number }) => {
-                  const active = selectedCategoryKey === cat.key;
-                  const countLabel =
-                    typeof cat.active_deal_count === 'number' && cat.active_deal_count > 0
-                      ? ` (${cat.active_deal_count})`
-                      : '';
-                  return (
-                    <Pressable
-                      key={cat.key}
-                      style={[styles.categoryOptionRow, active && styles.categoryOptionRowActive]}
-                      onPress={() => {
-                        setSelectedCategoryKey(cat.key);
-                        setIsCategoryOpen(false);
-                      }}>
-                      <Text style={[styles.categoryOptionText, active && styles.categoryOptionTextActive]}>
-                        {cat.label}
-                        {countLabel}
-                      </Text>
-                      {active ? (
-                        <MaterialCommunityIcons name="check" size={16} color={Brand.magenta} />
-                      ) : null}
-                    </Pressable>
-                  );
-                })
-              )}
-            </View>
-          ) : null}
-          {isRatingOpen ? (
-            <View style={styles.categoryDropdown}>
-              {RATING_OPTIONS.map((r) => {
-                const active = selectedRatingKey === r.key;
-                return (
-                  <Pressable
-                    key={r.key}
-                    style={[styles.categoryOptionRow, active && styles.categoryOptionRowActive]}
-                    onPress={() => {
-                      setSelectedRatingKey(r.key);
-                      setIsRatingOpen(false);
-                    }}>
-                    <Text style={[styles.categoryOptionText, active && styles.categoryOptionTextActive]}>
-                      {r.label}
-                    </Text>
-                    {active ? (
-                      <MaterialCommunityIcons name="check" size={16} color={Brand.magenta} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </View>
-          ) : null}
-          {!locationReady || dealsLoading ? (
-            <View style={styles.dealsState}>
-              <ActivityIndicator size="small" color={Brand.magenta} />
-              <Text style={styles.dealsStateText}>Loading nearby deals…</Text>
-            </View>
-          ) : dealsError ? (
-            <View style={styles.dealsState}>
-              <Text style={styles.dealsStateTitle}>Could not load deals</Text>
-              <Text style={styles.dealsStateSub}>Check your connection and try again.</Text>
-              <Pressable style={styles.dealsRetryBtn} onPress={() => void refetchDeals()}>
-                <Text style={styles.dealsRetryBtnText}>Retry</Text>
-              </Pressable>
-            </View>
-          ) : dealCards.length === 0 ? (
-            <View style={styles.dealsState}>
-              <Text style={styles.dealsStateText}>No deals found near this location.</Text>
-            </View>
-          ) : (
-            <>
-              {dealsFetching && !dealsLoading ? (
-                <Text style={styles.refreshHint}>Updating…</Text>
-              ) : null}
-              {dealCards.map((deal) => (
-                <DealCardRow
-                  key={deal.key}
-                  deal={deal}
-                  onPress={() => openGrouponDeal(deal)}
-                />
-              ))}
-            </>
-          )}
         </View>
+
+        <NearbyDealsSection
+          dealTab={dealTab}
+          dealTabs={DEAL_TABS}
+          onDealTab={setDealTab}
+          selectedRatingLabel={selectedRatingLabel}
+          onRatingPress={() => setIsRatingOpen((v) => !v)}
+          isRatingOpen={isRatingOpen}
+          ratingOptions={RATING_OPTIONS.map((r) => ({ key: r.key, label: r.label }))}
+          selectedRatingKey={selectedRatingKey}
+          onSelectRating={(key) => {
+            setSelectedRatingKey(key as RatingOption['key']);
+            setIsRatingOpen(false);
+          }}
+          locationReady={locationReady}
+          dealsLoading={dealsLoading}
+          dealsFetching={dealsFetching}
+          dealsError={Boolean(dealsError)}
+          groupedDealRows={groupedDealRows}
+          onRetry={() => void refetchDeals()}
+          renderRow={(g) => (
+            <RestaurantDealGroupRow
+              key={g.key}
+              deals={g.deals}
+              totalDeals={g.totalDeals}
+              onOpenDeal={openGrouponDeal}
+            />
+          )}
+        />
       </ScrollView>
 
       {!user ? (
@@ -755,18 +752,22 @@ const styles = StyleSheet.create({
   catList: {
     paddingHorizontal: H_PAD,
     paddingBottom: 16,
-    gap: 4,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 10,
   },
   catItem: {
-    width: 76,
+    width: '25%',
     alignItems: 'center',
-    marginRight: 6,
+  },
+  catItemActive: {
+    opacity: 0.96,
   },
   catCircle: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: Brand.white,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#F7F1F1',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 6,
@@ -775,24 +776,154 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 3,
     elevation: 2,
+    overflow: 'hidden',
+  },
+  catImage: {
+    width: '100%',
+    height: '100%',
   },
   catLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: Brand.black,
     textAlign: 'center',
   },
   bannerList: {
-    paddingLeft: H_PAD,
-    paddingBottom: 20,
+    paddingHorizontal: H_PAD,
+    paddingBottom: 14,
+    marginBottom: 6,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'stretch',
+  },
+  bannerItem: {
+    width: TOP_CARD_W,
+  },
+  qponCard: {
+    width: '100%',
+    minHeight: 168,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  qponCardSand: {
+    backgroundColor: '#E8E0D4',
+  },
+  qponCardHeader: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  qponCardTitleDark: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1A1A1A',
+  },
+  qponCardSubDark: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#4A4A4A',
+  },
+  qponCardImageWrap: {
+    flex: 1,
+    minHeight: 88,
+    marginHorizontal: 6,
+    marginBottom: 6,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  qponCardImage: {
+    width: '100%',
+    height: '100%',
+    minHeight: 88,
+  },
+  qponCardFab: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#E53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qponCardFlash: {
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+  },
+  qponFlashTimerBar: {
+    alignSelf: 'center',
+    marginTop: 6,
+    marginBottom: 4,
+    backgroundColor: '#FFEB3B',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  qponFlashTimerText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#1A1A1A',
+  },
+  qponCardTitleLight: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#fff',
+    textAlign: 'center',
+  },
+  qponCardSubLight: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.95)',
+    textAlign: 'center',
+  },
+  qponFlashArtRow: {
+    flex: 1,
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qponCardOrange: {
+    backgroundColor: '#FF7A1A',
+    paddingHorizontal: 8,
+    paddingTop: 10,
+    paddingBottom: 8,
+  },
+  qponCardTitleOnOrange: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  qponCardSubOnOrange: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.95)',
+  },
+  qponBrandRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  qponBrandChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  qponBrandChipText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '800',
   },
   bannerCard: {
-    height: 132,
-    borderRadius: 18,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    height: 108,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 9,
     overflow: 'hidden',
   },
   bannerYellow: {
@@ -807,22 +938,28 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   bannerTitle: {
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '800',
     color: Brand.black,
   },
   bannerSub: {
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '600',
     color: '#333',
   },
+  bannerMeta: {
+    marginTop: 4,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#5B5B5B',
+  },
   bannerTitleLight: {
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '800',
     color: '#fff',
   },
   bannerSubLight: {
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '600',
     color: 'rgba(255,255,255,0.95)',
   },
@@ -848,7 +985,7 @@ const styles = StyleSheet.create({
   },
   timerText: {
     fontWeight: '800',
-    fontSize: 13,
+    fontSize: 12,
     color: Brand.black,
   },
   bannerEmoji: {
@@ -872,10 +1009,10 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   nearbyTitle: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '800',
     color: Brand.black,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   filterScroll: {
     marginHorizontal: -H_PAD,
@@ -927,12 +1064,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(216,27,96,0.35)',
     backgroundColor: '#FFF5F8',
   },
-  stripDivider: {
-    width: 1,
-    height: 26,
-    backgroundColor: '#E0E0E0',
-    marginHorizontal: 4,
-  },
   categoryDropdown: {
     marginTop: -6,
     marginBottom: 12,
@@ -961,6 +1092,17 @@ const styles = StyleSheet.create({
   },
   categoryOptionTextActive: {
     color: Brand.magenta,
+  },
+  ratingOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  ratingStarsText: {
+    minWidth: 56,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#F6C035',
   },
   dealsState: {
     paddingVertical: 28,
@@ -1003,46 +1145,108 @@ const styles = StyleSheet.create({
   },
   dealCard: {
     flexDirection: 'row',
-    backgroundColor: Brand.white,
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 12,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 0,
+    marginBottom: 0,
+    gap: 8,
+    alignItems: 'flex-start',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E9E9E9',
   },
   dealImg: {
-    width: 128,
-    height: 128,
-    borderRadius: 12,
+    width: 126,
+    height: 126,
+    borderRadius: 10,
     backgroundColor: '#EEE',
   },
   dealBody: {
     flex: 1,
     minWidth: 0,
     justifyContent: 'flex-start',
+    minHeight: 126,
+    paddingBottom: 2,
   },
   dealTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#6B4423',
-    marginBottom: 4,
+    color: '#191919',
+    marginBottom: 1,
   },
-  dealSold: {
+  dealMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginBottom: 2,
+  },
+  dealMetaText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  dealMetaDot: {
+    fontSize: 11,
+    color: '#A0A0A0',
+  },
+  dealTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 3,
+  },
+  dealTagPink: {
+    fontSize: 11,
+    color: Brand.magenta,
+    fontWeight: '700',
+  },
+  dealTagMuted: {
+    fontSize: 11,
+    color: '#484848',
+    fontWeight: '600',
+  },
+  dealTagSep: {
+    fontSize: 12,
+    color: '#9E9E9E',
+  },
+  dealAddressText: {
+    fontSize: 10,
+    color: '#777',
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  dealTotalHint: {
     fontSize: 11,
     color: Brand.grey,
-    marginBottom: 8,
+    fontWeight: '600',
+    marginTop: 2,
+    marginBottom: 2,
   },
-  dealPriceRow: {
+  dealLineRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
+    flexWrap: 'nowrap',
+    gap: 4,
+    marginBottom: 1,
   },
+  dealPriceLine: {
+    fontSize: 11,
+    color: Brand.magenta,
+    fontWeight: '800',
+  },
+  dealOriginalPriceLine: {
+    fontSize: 12,
+    color: '#8A8A8A',
+    fontWeight: '700',
+    textDecorationLine: 'line-through',
+  },
+  dealLineName: {
+    flex: 1,
+    fontSize: 11,
+    color: '#343434',
+    fontWeight: '600',
+  },
+  dealPriceRow: { display: 'none' },
   priceCol: {
     justifyContent: 'center',
     gap: 1,
@@ -1072,26 +1276,18 @@ const styles = StyleSheet.create({
     textDecorationStyle: 'solid',
     marginBottom: 1,
   },
-  dealLocDistanceRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 10,
-  },
+  dealLocDistanceRow: { display: 'none' },
   dealLocRow: {
-    flex: 1,
+    flex: 0,
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 5,
-    minWidth: 0,
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 2,
   },
   dealLocText: {
-    fontSize: 13,
-    color: '#4A4A4A',
-    flex: 1,
-    lineHeight: 15,
+    fontSize: 10,
+    color: '#8A8A8A',
     fontWeight: '600',
-    maxWidth: 76,
   },
   distanceTextRow: {
     flexShrink: 0,
