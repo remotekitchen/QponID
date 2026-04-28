@@ -142,6 +142,37 @@ export type GrouponDealReview = {
   [key: string]: unknown;
 };
 
+export type GrouponVoucherRedeemStatusResponse = {
+  ok: boolean;
+  is_redeemed: boolean;
+  voucher?: {
+    code?: string;
+    status?: string;
+    remaining_value?: string | null;
+    deal_type?: string;
+    title?: string;
+    expires_at?: string;
+    deal_discount?: string;
+    original_price?: string;
+    sale_price?: string;
+    payment_method?: string;
+    is_paid?: boolean;
+    [key: string]: unknown;
+  };
+  redemption?: {
+    bill_total?: string;
+    covered_amount?: string;
+    customer_due?: string;
+    redeemed_at?: string;
+    [key: string]: unknown;
+  };
+  order_id?: number | string;
+  order_method?: string;
+  total?: string;
+  order_items?: unknown[];
+  [key: string]: unknown;
+};
+
 /**
  * When `GET .../deals/:id` returns 401 (anonymous), build a detail-shaped object
  * from the public list endpoint (same rows as home).
@@ -332,6 +363,13 @@ export const grouponApi = apiSlice.injectEndpoints({
         body: { qty, payment_method },
       }),
     }),
+    getVoucherRedeemStatus: builder.query<GrouponVoucherRedeemStatusResponse, { code: string }>({
+      query: ({ code }) => ({
+        // App-facing endpoint (admin route returns HTML login page and breaks JSON parsing).
+        url: `api/groupon/v1/vouchers/redeem-status?code=${encodeURIComponent(code)}`,
+        method: 'GET',
+      }),
+    }),
     checkGrouponPaymentStatus: builder.query<
       unknown,
       { dealId: string; transactionId: string }
@@ -369,6 +407,7 @@ export const {
   useGetGrouponListQuery,
   useGetGrouponDetailsQuery,
   usePurchaseGrouponMutation,
+  useLazyGetVoucherRedeemStatusQuery,
   useLazyCheckGrouponPaymentStatusQuery,
   useGetGrouponDealReviewsQuery,
   useSubmitGrouponStoreReviewMutation,
