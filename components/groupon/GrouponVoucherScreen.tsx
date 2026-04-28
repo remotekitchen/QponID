@@ -3,12 +3,17 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 
 import { Brand } from '@/constants/Colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { addRestaurantReview } from '@/lib/restaurantReviews';
-import { useSubmitGrouponStoreReviewMutation } from '@/store/grouponApi';
+import {
+  type GrouponVoucherRedeemStatusResponse,
+  useLazyGetVoucherRedeemStatusQuery,
+  useSubmitGrouponStoreReviewMutation,
+} from '@/store/grouponApi';
+import { setGrouponPurchase } from '@/store/grouponPurchaseSlice';
 import type { RootState } from '@/store';
 
 const PAGE_BG = '#F6F6F6';
@@ -72,8 +77,11 @@ function extractApiErrorMessage(error: unknown): string | null {
 export default function GrouponVoucherScreen() {
   const router = useRouter();
   const { user } = useAuth();
+  const [redeemStatus, setRedeemStatus] = useState<GrouponVoucherRedeemStatusResponse | null>(null);
   const purchaseData = useSelector((s: RootState) => s.grouponPurchase.purchase);
   const dealInfo = useSelector((s: RootState) => s.grouponPurchase.deal);
+  const [checkRedeemStatus] = useLazyGetVoucherRedeemStatusQuery();
+  const dispatch = useDispatch();
   const [submitReview, { isLoading: isSubmittingReview }] =
     useSubmitGrouponStoreReviewMutation();
   const [rating, setRating] = useState(5);
@@ -117,6 +125,53 @@ export default function GrouponVoucherScreen() {
     console.log('[Groupon Voucher] purchase payload:', purchaseData);
     console.log('[Groupon Voucher] extracted order id:', orderId);
   }, [purchaseData, orderId]);
+
+  useEffect(() => {
+    if (!voucherCode) return;
+    let stopped = false;
+    let authHtmlBlocked = false;
+    const poll = async () => {
+      if (authHtmlBlocked) return;
+      try {
+        const data = await checkRedeemStatus({ code: voucherCode }).unwrap();
+        console.log('[Groupon Voucher] redeem-status response:', data);
+        if (stopped) return;
+        setRedeemStatus(data);
+        if (data?.is_redeemed === true) {
+          // Keep summary payload in purchase slice for the summary screen.
+          dispatch(setGrouponPurchase({ purchase: data as Record<string, unknown>, deal: dealInfo }));
+          router.replace('/groupon-order-summary' as never);
+        }
+      } catch (e) {
+        console.log('[Groupon Voucher] redeem-status error:', e);
+        // Backend returned admin login HTML instead of JSON.
+        // Prevent noisy repeated logs every interval and guide backend fix.
+        if (
+          e &&
+          typeof e === 'object' &&
+          'status' in e &&
+          (e as { status?: unknown }).status === 'PARSING_ERROR' &&
+          'data' in e &&
+          typeof (e as { data?: unknown }).data === 'string' &&
+          (e as { data: string }).data.includes('Django administration')
+        ) {
+          authHtmlBlocked = true;
+          console.warn(
+            '[Groupon Voucher] redeem-status endpoint returned admin login HTML. ' +
+              'Use app/public endpoint or provide authenticated API access.'
+          );
+        }
+      }
+    };
+    void poll();
+    const id = setInterval(() => {
+      void poll();
+    }, 4000);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [voucherCode, checkRedeemStatus, router, dealInfo, dispatch]);
 
   const handleSubmitReview = async () => {
     setReviewError(null);
