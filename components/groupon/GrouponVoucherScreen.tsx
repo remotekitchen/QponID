@@ -1,17 +1,14 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { Brand } from '@/constants/Colors';
-import { useAuth } from '@/contexts/AuthContext';
-import { addRestaurantReview } from '@/lib/restaurantReviews';
 import {
   type GrouponVoucherRedeemStatusResponse,
   useLazyGetVoucherRedeemStatusQuery,
-  useSubmitGrouponStoreReviewMutation,
 } from '@/store/grouponApi';
 import { setGrouponPurchase } from '@/store/grouponPurchaseSlice';
 import type { RootState } from '@/store';
@@ -59,35 +56,13 @@ function extractOrderId(purchase: unknown): string | number | null {
   return null;
 }
 
-function extractApiErrorMessage(error: unknown): string | null {
-  if (!error || typeof error !== 'object') return null;
-  const errObj = error as Record<string, unknown>;
-  const data = errObj.data;
-  if (!data || typeof data !== 'object') return null;
-  const dataObj = data as Record<string, unknown>;
-  if (typeof dataObj.detail === 'string' && dataObj.detail.trim()) return dataObj.detail.trim();
-  if (typeof dataObj.message === 'string' && dataObj.message.trim()) return dataObj.message.trim();
-  const firstKey = Object.keys(dataObj)[0];
-  const firstVal = firstKey ? dataObj[firstKey] : null;
-  if (typeof firstVal === 'string' && firstVal.trim()) return firstVal.trim();
-  if (Array.isArray(firstVal) && typeof firstVal[0] === 'string') return String(firstVal[0]).trim();
-  return null;
-}
-
 export default function GrouponVoucherScreen() {
   const router = useRouter();
-  const { user } = useAuth();
   const [redeemStatus, setRedeemStatus] = useState<GrouponVoucherRedeemStatusResponse | null>(null);
   const purchaseData = useSelector((s: RootState) => s.grouponPurchase.purchase);
   const dealInfo = useSelector((s: RootState) => s.grouponPurchase.deal);
   const [checkRedeemStatus] = useLazyGetVoucherRedeemStatusQuery();
   const dispatch = useDispatch();
-  const [submitReview, { isLoading: isSubmittingReview }] =
-    useSubmitGrouponStoreReviewMutation();
-  const [rating, setRating] = useState(5);
-  const [comment, setComment] = useState('');
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [reviewSuccess, setReviewSuccess] = useState<string | null>(null);
 
   const voucher = useMemo(() => {
     if (!purchaseData || typeof purchaseData !== 'object') return null;
@@ -118,13 +93,11 @@ export default function GrouponVoucherScreen() {
     (voucher?.expires_at as string | undefined) || dealInfo?.valid_to || '';
 
   const paidOk = isPaidPayload(purchaseData);
-  const orderId = extractOrderId(purchaseData);
 
   useEffect(() => {
     if (!purchaseData) return;
     console.log('[Groupon Voucher] purchase payload:', purchaseData);
-    console.log('[Groupon Voucher] extracted order id:', orderId);
-  }, [purchaseData, orderId]);
+  }, [purchaseData]);
 
   useEffect(() => {
     if (!voucherCode) return;
@@ -172,48 +145,6 @@ export default function GrouponVoucherScreen() {
       clearInterval(id);
     };
   }, [voucherCode, checkRedeemStatus, router, dealInfo, dispatch]);
-
-  const handleSubmitReview = async () => {
-    setReviewError(null);
-    setReviewSuccess(null);
-    if (!orderId) {
-      setReviewError('Order ID is unavailable for this voucher. Please review from order history.');
-      return;
-    }
-    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
-      setReviewError('Please select a rating between 1 and 5.');
-      return;
-    }
-
-    try {
-      await submitReview({
-        order_id: orderId,
-        rating,
-        comment: comment.trim() || undefined,
-      }).unwrap();
-
-      if (user) {
-        await addRestaurantReview({
-          id: `groupon-${Date.now()}`,
-          restaurantId: `groupon-${dealInfo?.restaurant ?? 'store'}`,
-          restaurantTitle: dealInfo?.restaurant_name || 'Restaurant',
-          userId: user.id,
-          userPhone: user.phone,
-          userName: user.phone ? `User ${user.phone.slice(-4)}` : 'User',
-          rating,
-          comment: comment.trim() || `Rated ${rating}/5`,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      setReviewSuccess('Thank you! Your review was submitted.');
-      setComment('');
-    } catch (e) {
-      console.log('[Groupon Voucher] submit review error:', e);
-      const message = extractApiErrorMessage(e);
-      setReviewError(message || 'Could not submit review. Please try again.');
-    }
-  };
 
   if (!purchaseData || !dealInfo) {
     return (
@@ -289,53 +220,6 @@ export default function GrouponVoucherScreen() {
           </View>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.instructionsTitle}>Rate your experience</Text>
-          <Text style={styles.rulesText}>
-            Share your feedback so others can choose better deals.
-          </Text>
-          <View style={styles.ratingRow}>
-            {[1, 2, 3, 4, 5].map((value) => (
-              <Pressable
-                key={value}
-                onPress={() => setRating(value)}
-                style={styles.starBtn}
-                hitSlop={8}>
-                <MaterialCommunityIcons
-                  name={value <= rating ? 'star' : 'star-outline'}
-                  size={24}
-                  color={value <= rating ? '#F59E0B' : '#9CA3AF'}
-                />
-              </Pressable>
-            ))}
-            <Text style={styles.ratingValue}>{rating}.0</Text>
-          </View>
-          <TextInput
-            value={comment}
-            onChangeText={setComment}
-            placeholder="Write a short comment (optional)"
-            placeholderTextColor="#9CA3AF"
-            multiline
-            style={styles.commentInput}
-          />
-          {!orderId ? (
-            <Text style={styles.warnText}>
-              Order ID not found in this response. Review submit may be unavailable.
-            </Text>
-          ) : null}
-          {reviewError ? <Text style={styles.errorText}>{reviewError}</Text> : null}
-          {reviewSuccess ? <Text style={styles.successText}>{reviewSuccess}</Text> : null}
-          <Pressable
-            onPress={handleSubmitReview}
-            disabled={isSubmittingReview}
-            style={[styles.submitBtn, isSubmittingReview && styles.submitBtnDisabled]}>
-            {isSubmittingReview ? (
-              <ActivityIndicator color={Brand.black} />
-            ) : (
-              <Text style={styles.submitBtnText}>Submit Review</Text>
-            )}
-          </Pressable>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -420,32 +304,4 @@ const styles = StyleSheet.create({
   },
   totalLabel: { fontSize: 14, fontWeight: '700', color: '#111827' },
   totalVal: { fontSize: 14, fontWeight: '800', color: '#111827' },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-  starBtn: { paddingVertical: 4, paddingHorizontal: 2 },
-  ratingValue: { marginLeft: 8, fontSize: 13, fontWeight: '700', color: '#374151' },
-  commentInput: {
-    marginTop: 12,
-    minHeight: 86,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    backgroundColor: '#F9FAFB',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    textAlignVertical: 'top',
-    color: '#111827',
-    fontSize: 13,
-  },
-  warnText: { marginTop: 8, fontSize: 12, color: '#92400E' },
-  errorText: { marginTop: 8, fontSize: 12, color: '#B91C1C' },
-  successText: { marginTop: 8, fontSize: 12, color: '#047857' },
-  submitBtn: {
-    marginTop: 12,
-    backgroundColor: Brand.yellow,
-    borderRadius: 999,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  submitBtnDisabled: { opacity: 0.75 },
-  submitBtnText: { fontWeight: '800', color: Brand.black },
 });
