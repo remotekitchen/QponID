@@ -1,12 +1,16 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSelector } from 'react-redux';
 
 import { Brand } from '@/constants/Colors';
-import { useSubmitGrouponStoreReviewMutation } from '@/store/grouponApi';
+import {
+  useGetRestaurantDealsByPopularityQuery,
+  useGetSpecialDiscountItemsQuery,
+  useSubmitGrouponStoreReviewMutation,
+} from '@/store/grouponApi';
 import type { RootState } from '@/store';
 
 function readStr(obj: Record<string, unknown> | null, key: string, fallback = '—'): string {
@@ -19,6 +23,16 @@ function formatDate(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString();
+}
+
+function formatTk(value: string | number): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  const hasFraction = Math.abs(n % 1) > 0.001;
+  return `৳${n.toLocaleString('en-BD', {
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function extractApiErrorMessage(error: unknown): string | null {
@@ -45,6 +59,9 @@ export default function GrouponOrderSummaryScreen() {
   const [comment, setComment] = useState('');
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewSuccess, setReviewSuccess] = useState<string | null>(null);
+  const restaurantId =
+    typeof dealInfo?.restaurant === 'number' ? dealInfo.restaurant : null;
+  const currentDealId = typeof dealInfo?.id === 'number' ? dealInfo.id : null;
 
   const voucher = useMemo(
     () => (purchaseData && typeof purchaseData.voucher === 'object' ? (purchaseData.voucher as Record<string, unknown>) : null),
@@ -59,6 +76,66 @@ export default function GrouponOrderSummaryScreen() {
   );
 
   const isRedeemed = Boolean(purchaseData && purchaseData.is_redeemed === true);
+  const orderItems = useMemo(() => {
+    const raw = purchaseData?.order_items;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((it) => it && typeof it === 'object')
+      .map((it) => it as Record<string, unknown>)
+      .filter((it) => it.is_canceled !== true)
+      .map((it, idx) => ({
+        key: String(it.id ?? `item-${idx}`),
+        name:
+          typeof it.name === 'string' && it.name.trim()
+            ? it.name.trim()
+            : 'Item',
+        quantity:
+          typeof it.quantity === 'number'
+            ? it.quantity
+            : Number(it.quantity ?? 1) || 1,
+        unitPrice:
+          typeof it.unit_price === 'string' || typeof it.unit_price === 'number'
+            ? it.unit_price
+            : '0',
+      }));
+  }, [purchaseData]);
+  const { data: sameRestaurantDealsResp } = useGetRestaurantDealsByPopularityQuery(
+    { restaurantId: restaurantId ?? 0, ordering: 'popular' },
+    { skip: !restaurantId }
+  );
+  const { data: specialDiscountItems = [] } = useGetSpecialDiscountItemsQuery();
+  const recommendationCards = useMemo(() => {
+    const sameRestaurant = (sameRestaurantDealsResp?.results ?? [])
+      .filter((d) => !d.is_deleted)
+      .filter((d) => (currentDealId != null ? d.id !== currentDealId : true))
+      .map((d) => ({
+        key: `same-${d.id}`,
+        dealId: d.id,
+        title: d.name,
+        image: d.groupon_image || '',
+        salePrice: Number(d.sale_price ?? 0),
+        originalPrice: Number(d.original_price ?? 0),
+        discountLabel:
+          d.discount_type === 'percentage' && Number.isFinite(Number(d.restaurant_discount))
+            ? `-${Math.round(Number(d.restaurant_discount))}%`
+            : '',
+      }));
+    if (sameRestaurant.length > 0) return sameRestaurant.slice(0, 8);
+    return specialDiscountItems
+      .filter((d) => (currentDealId != null ? d.id !== currentDealId : true))
+      .map((d) => ({
+        key: `special-${d.id}`,
+        dealId: d.id,
+        title: d.name,
+        image: d.image || '',
+        salePrice: Number(d.sale_price ?? 0),
+        originalPrice: Number(d.original_price ?? 0),
+        discountLabel: Number.isFinite(Number(d.restaurant_discount))
+          ? `-${Math.round(Number(d.restaurant_discount))}%`
+          : '',
+      }))
+      .slice(0, 8);
+  }, [sameRestaurantDealsResp, currentDealId, specialDiscountItems]);
   const orderIdRaw = purchaseData?.order_id;
   const orderId =
     typeof orderIdRaw === 'number'
@@ -142,6 +219,51 @@ export default function GrouponOrderSummaryScreen() {
           <Row label="Customer Due" value={readStr(redemption, 'customer_due')} />
           <Row label="Total" value={String(purchaseData?.total ?? '—')} />
         </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Order Items</Text>
+          {orderItems.length === 0 ? (
+            <Text style={styles.helperText}>No item details available.</Text>
+          ) : (
+            orderItems.map((item) => (
+              <View key={item.key} style={styles.itemRow}>
+                <View style={styles.itemInfo}>
+                  <Text style={styles.itemName} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.itemQty}>Qty: {item.quantity}</Text>
+                </View>
+                <Text style={styles.itemPrice}>{formatTk(item.unitPrice)}</Text>
+              </View>
+            ))
+          )}
+        </View>
+
+        {recommendationCards.length > 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Recommended Deals</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.recoList}>
+              {recommendationCards.map((item) => (
+                <Pressable
+                  key={item.key}
+                  style={styles.recoCard}
+                  onPress={() => router.push(`/groupon/${item.dealId}` as never)}>
+                  <Image source={{ uri: item.image }} style={styles.recoImage} />
+                  <Text style={styles.recoTitle} numberOfLines={2}>
+                    {item.title}
+                  </Text>
+                  <View style={styles.recoPriceRow}>
+                    {item.discountLabel ? <Text style={styles.recoDiscount}>{item.discountLabel}</Text> : null}
+                    <Text style={styles.recoPrice}>{formatTk(item.salePrice)}</Text>
+                  </View>
+                  {item.originalPrice > item.salePrice ? (
+                    <Text style={styles.recoOriginal}>{formatTk(item.originalPrice)}</Text>
+                  ) : null}
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Rate your experience</Text>
@@ -236,6 +358,27 @@ const styles = StyleSheet.create({
   },
   rowLabel: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
   rowVal: { fontSize: 12, color: '#111827', fontWeight: '700', flexShrink: 1, textAlign: 'right' },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#ECECEC',
+    gap: 8,
+  },
+  itemInfo: { flex: 1, minWidth: 0 },
+  itemName: { fontSize: 13, color: '#111827', fontWeight: '700' },
+  itemQty: { marginTop: 2, fontSize: 12, color: '#6B7280', fontWeight: '600' },
+  itemPrice: { fontSize: 13, color: '#111827', fontWeight: '800' },
+  recoList: { gap: 10, paddingRight: 6 },
+  recoCard: { width: 148, backgroundColor: '#FAFAFA', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#F0F0F0' },
+  recoImage: { width: '100%', height: 92, borderRadius: 10, backgroundColor: '#EEE', marginBottom: 6 },
+  recoTitle: { fontSize: 12, fontWeight: '700', color: '#111827', minHeight: 32 },
+  recoPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  recoDiscount: { fontSize: 11, fontWeight: '800', color: '#C62828' },
+  recoPrice: { fontSize: 12, fontWeight: '800', color: Brand.magenta },
+  recoOriginal: { fontSize: 11, color: '#9CA3AF', textDecorationLine: 'line-through', marginTop: 1 },
   ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   starBtn: { paddingVertical: 4, paddingHorizontal: 2 },
   ratingValue: { marginLeft: 8, fontSize: 13, fontWeight: '700', color: '#374151' },

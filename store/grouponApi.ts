@@ -142,6 +142,52 @@ export type GrouponDealReview = {
   [key: string]: unknown;
 };
 
+export type GrouponRestaurantDealCategory = {
+  id: number;
+  key: string;
+  label: string;
+};
+
+export type GrouponRestaurantDealRow = {
+  id: number;
+  restaurant: number;
+  groupon_image: string | null;
+  name: string;
+  person: number | null;
+  original_price: string;
+  restaurant_discount: number;
+  discount_type?: string;
+  ht_discount: number;
+  discount: string;
+  sale_price: number;
+  total_sales?: number;
+  is_deleted?: boolean;
+  is_available?: boolean;
+  review_count?: number;
+  deal_categories?: GrouponRestaurantDealCategory[];
+};
+
+export type GrouponRestaurantDealsResponse = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: GrouponRestaurantDealRow[];
+};
+
+export type GrouponSpecialDiscountItem = {
+  id: number;
+  restaurant: string;
+  name: string;
+  image: string;
+  original_price: string;
+  sale_price: string;
+  restaurant_discount: string;
+  ht_discount: string;
+  discount: string;
+  total_sales: number;
+  people_count: number | null;
+};
+
 export type GrouponVoucherRedeemStatusResponse = {
   ok: boolean;
   is_redeemed: boolean;
@@ -172,6 +218,55 @@ export type GrouponVoucherRedeemStatusResponse = {
   order_items?: unknown[];
   [key: string]: unknown;
 };
+
+export type GrouponOrderHistoryItem = {
+  order_id: string;
+  id: number;
+  review: boolean;
+  status: string;
+  status_display: string;
+  is_paid: boolean;
+  qr_url: string | null;
+  created_at: string;
+  groupon_quantity: number;
+  deal: {
+    id: number;
+    title: string;
+    restaurant_discount_percentage: number;
+    ht_discount_percentage: number;
+  };
+  pricing: {
+    original_price: string;
+    restaurant_discount_amount: string;
+    ht_discount_amount: string;
+    total_discount_amount: string;
+    sale_price: string;
+  };
+  customer: {
+    name: string;
+    email: string;
+  };
+  items: Array<{
+    id: number;
+    name: string;
+    quantity: number;
+    unit_price: string;
+    is_canceled: boolean;
+  }>;
+};
+
+function normalizeMyOrdersPayload(response: unknown): GrouponOrderHistoryItem[] {
+  if (Array.isArray(response)) return response as GrouponOrderHistoryItem[];
+  if (
+    response &&
+    typeof response === 'object' &&
+    'results' in response &&
+    Array.isArray((response as { results: unknown }).results)
+  ) {
+    return (response as { results: GrouponOrderHistoryItem[] }).results;
+  }
+  return [];
+}
 
 /**
  * When `GET .../deals/:id` returns 401 (anonymous), build a detail-shaped object
@@ -297,6 +392,23 @@ function normalizeGrouponListPayload(response: unknown): GrouponListRow[] {
   return [];
 }
 
+function normalizeRestaurantDealsPayload(response: unknown): GrouponRestaurantDealsResponse {
+  if (
+    response &&
+    typeof response === 'object' &&
+    'results' in response &&
+    Array.isArray((response as { results: unknown }).results)
+  ) {
+    return response as GrouponRestaurantDealsResponse;
+  }
+  return { count: 0, next: null, previous: null, results: [] };
+}
+
+function normalizeSpecialDiscountItemsPayload(response: unknown): GrouponSpecialDiscountItem[] {
+  if (Array.isArray(response)) return response as GrouponSpecialDiscountItem[];
+  return [];
+}
+
 export const grouponApi = apiSlice.injectEndpoints({
   endpoints: (builder) => ({
     getRestaurantsWithDeals: builder.query<
@@ -346,6 +458,23 @@ export const grouponApi = apiSlice.injectEndpoints({
         method: 'GET',
       }),
     }),
+    getRestaurantDealsByPopularity: builder.query<
+      GrouponRestaurantDealsResponse,
+      { restaurantId: number; ordering?: string }
+    >({
+      query: ({ restaurantId, ordering = 'popular' }) => ({
+        url: `api/groupon/v1/restaurants/${restaurantId}/deals?ordering=${encodeURIComponent(ordering)}`,
+        method: 'GET',
+      }),
+      transformResponse: normalizeRestaurantDealsPayload,
+    }),
+    getSpecialDiscountItems: builder.query<GrouponSpecialDiscountItem[], void>({
+      query: () => ({
+        url: 'api/groupon/v1/special-discount-items/',
+        method: 'GET',
+      }),
+      transformResponse: normalizeSpecialDiscountItemsPayload,
+    }),
     /** Same contract as Hungry Tiger / Remote Kitchen checkout */
     purchaseGroupon: builder.mutation<
       {
@@ -369,6 +498,13 @@ export const grouponApi = apiSlice.injectEndpoints({
         url: `api/groupon/v1/vouchers/redeem-status?code=${encodeURIComponent(code)}`,
         method: 'GET',
       }),
+    }),
+    getMyOrders: builder.query<GrouponOrderHistoryItem[], void>({
+      query: () => ({
+        url: 'api/groupon/v1/my-orders',
+        method: 'GET',
+      }),
+      transformResponse: normalizeMyOrdersPayload,
     }),
     checkGrouponPaymentStatus: builder.query<
       unknown,
@@ -406,8 +542,11 @@ export const {
   useGetGrouponCategoriesQuery,
   useGetGrouponListQuery,
   useGetGrouponDetailsQuery,
+  useGetRestaurantDealsByPopularityQuery,
+  useGetSpecialDiscountItemsQuery,
   usePurchaseGrouponMutation,
   useLazyGetVoucherRedeemStatusQuery,
+  useGetMyOrdersQuery,
   useLazyCheckGrouponPaymentStatusQuery,
   useGetGrouponDealReviewsQuery,
   useSubmitGrouponStoreReviewMutation,
